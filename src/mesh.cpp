@@ -6,6 +6,7 @@
 #include <QHash>
 #include <QVarLengthArray>
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <limits>
 
@@ -253,8 +254,20 @@ bool nextToken(const char *&p, const char *end, const char **start, const char *
     return true;
 }
 
+// Numbers are read in place: a large model has tens of millions of them, and
+// a temporary string for each is most of the time it takes to read.
 double toDouble(const char *start, const char *stop) {
-    return QByteArray::fromRawData(start, int(stop - start)).toDouble();
+    double value = 0;
+    std::from_chars(start, stop, value);
+    return value;
+}
+
+// One "v/vt/vn" index, 1-based or negative from the end; 0 when absent.
+int readIndex(const char *&p, const char *stop) {
+    int value = 0;
+    const auto result = std::from_chars(p, stop, value);
+    p = result.ptr;
+    return result.ec == std::errc() ? value : 0;
 }
 
 void readMtl(const QString &path, QVector<Mesh::Material> *materials, QHash<QString, int> *byName) {
@@ -336,15 +349,25 @@ bool readObj(const QString &path, Mesh *mesh, QString *error) {
             } else if (keyword == "f") {
                 // A polygon fans out into triangles; IfcConvert writes
                 // triangles already.
-                QVector<Corner> polygon;
+                QVarLengthArray<Corner, 8> polygon;
+                auto resolve = [](int index, int count) { return index < 0 ? count + index : index - 1; };
                 while (nextToken(q, lineEnd, &a, &b)) {
-                    const QByteArray token = QByteArray(a, int(b - a)).trimmed();
-                    const QList<QByteArray> parts = token.split('/');
-                    auto resolve = [](int index, int count) { return index < 0 ? count + index : index - 1; };
-                    const int v = resolve(parts.value(0).toInt(), int(vertices.size() / 3));
-                    const int n = parts.size() > 2 && !parts.at(2).isEmpty()
-                        ? resolve(parts.at(2).toInt(), int(vertexNormals.size() / 3)) : -1;
-                    polygon.append({v, n});
+                    // Trailing carriage returns from files written on Windows.
+                    while (b > a && (b[-1] == '\r' || b[-1] == ' '))
+                        --b;
+                    const char *r = a;
+                    const int v = readIndex(r, b);
+                    int normal = 0;
+                    if (r < b && *r == '/') {
+                        ++r;
+                        readIndex(r, b); // texture coordinate, unused
+                        if (r < b && *r == '/') {
+                            ++r;
+                            normal = readIndex(r, b);
+                        }
+                    }
+                    polygon.append({resolve(v, int(vertices.size() / 3)),
+                                    normal ? resolve(normal, int(vertexNormals.size() / 3)) : -1});
                 }
                 if (element < 0) {
                     // Faces before any group belong to one unnamed element.

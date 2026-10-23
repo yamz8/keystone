@@ -87,7 +87,7 @@ Your `.ifc` files are only ever read. On four cores:
 | --- | --- | --- | --- | --- |
 | buildingSMART samples | 0.1–2 MB | 5–48 | under 2 s | instant |
 | Schependomlaan | 49 MB | 3,504 | 16 s | 0.8 s |
-| An 18-storey Italian residential tower | 73 MB | 11,123 | 3 min 50 s | 24 s |
+| An 18-storey Italian residential tower | 73 MB | 11,123 | 3 min 50 s | 4 s |
 
 Picking goes through a bounding-volume hierarchy over every triangle, and the
 storey slider, X-ray, and sections redraw without re-reading anything.
