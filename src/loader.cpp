@@ -116,8 +116,16 @@ void Loader::pruneCache() {
     std::sort(entries.begin(), entries.end(), [](const QFileInfo &a, const QFileInfo &b) {
         return a.lastModified() > b.lastModified();
     });
-    for (int i = cacheSize; i < entries.size(); ++i)
-        QDir(entries.at(i).absolutePath()).removeRecursively();
+    qint64 bytes = 0;
+    for (int i = 0; i < entries.size(); ++i) {
+        const QDir entry(entries.at(i).absolutePath());
+        for (const QFileInfo &file : entry.entryInfoList(QDir::Files))
+            bytes += file.size();
+        // The newest always stays, however big, so the model just opened
+        // reopens quickly.
+        if (i > 0 && (i >= m_cacheEntries || bytes > m_cacheBytes))
+            QDir(entries.at(i).absolutePath()).removeRecursively();
+    }
     // Work folders a crash left behind.
     for (const QFileInfo &work : QDir(m_cacheDirectory).entryInfoList({".convert-*"}, QDir::Dirs | QDir::Hidden))
         if (work.lastModified() < QDateTime::currentDateTime().addDays(-1))

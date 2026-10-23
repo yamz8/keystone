@@ -6,6 +6,7 @@ TEMPLATE = app
 
 HEADERS += \
     src/backend.h \
+    src/cli.h \
     src/elementlist.h \
     src/filepicker.h \
     src/ifcinfo.h \
@@ -20,6 +21,7 @@ HEADERS += \
 SOURCES += \
     src/main.cpp \
     src/backend.cpp \
+    src/cli.cpp \
     src/elementlist.cpp \
     src/ifcinfo.cpp \
     src/loader.cpp \

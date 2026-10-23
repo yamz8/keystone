@@ -1,0 +1,20 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install Qt and the toolchain
+        run: pacman -Syu --noconfirm --needed base-devel git qt6-base qt6-declarative qt6-quick3d qt6-svg qt6-wayland
+      - uses: actions/checkout@v4
+      - name: Build
+        run: bin/build
+      - name: Test
+        run: bin/test
+      - name: Commands run without a display
+        run: build/keystone help

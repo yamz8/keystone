@@ -41,8 +41,9 @@ public:
     // or -1 when the text holds none.
     static double parseProgress(const QByteArray &output);
     QString cacheDirectory() const { return m_cacheDirectory; }
-    // How many converted models the cache keeps, newest first.
-    static constexpr int cacheSize = 12;
+    // How many converted models the cache keeps, newest first, and how many
+    // bytes in all: a few huge models shouldn't fill the disk.
+    void setCacheLimits(int entries, qint64 bytes) { m_cacheEntries = entries; m_cacheBytes = bytes; }
 
     void start(const QString &path);
     void cancel();
@@ -69,6 +70,8 @@ private:
     QString m_path;
     QString m_cacheDirectory;
     QString m_cacheEntry;
+    int m_cacheEntries = 12;
+    qint64 m_cacheBytes = qint64(2) << 30;
     // Where IfcConvert writes, inside the cache, renamed to the entry once
     // it has finished so a half-written model is never taken for a cached one.
     std::shared_ptr<QTemporaryDir> m_work;

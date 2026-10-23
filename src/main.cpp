@@ -9,11 +9,21 @@
 #include <QUrl>
 
 #include "backend.h"
+#include "cli.h"
 #include "meshgeometry.h"
 #include "theme.h"
 #include "translator.h"
 
 int main(int argc, char *argv[]) {
+    // Commands draw no window, so they need no display: bare keystone prints
+    // help, as a command line tool should, and the launcher says keystone open.
+    if (argc == 1 || isCliCommand(argv[1])) {
+        QCoreApplication app(argc, argv);
+        app.setApplicationName("keystone");
+        app.setApplicationVersion("0.1.0");
+        return runCli(app.arguments());
+    }
+
     QGuiApplication app(argc, argv);
     app.setApplicationName("keystone");
     app.setApplicationVersion("0.1.0");
@@ -46,8 +56,11 @@ int main(int argc, char *argv[]) {
     if (engine.rootObjects().isEmpty())
         return 1;
 
-    // `keystone model.ifc` opens it straight away, as the launcher's %f does.
-    const QStringList arguments = app.arguments().mid(1);
+    // `keystone open model.ifc` (the launcher's form) and `keystone model.ifc`
+    // open it straight away.
+    QStringList arguments = app.arguments().mid(1);
+    if (arguments.value(0) == "open")
+        arguments.removeFirst();
     for (const QString &argument : arguments) {
         if (argument.startsWith('-'))
             continue;

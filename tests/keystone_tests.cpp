@@ -2,12 +2,16 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtTest>
+#include <cstdio>
+#include <unistd.h>
 
 #include "backend.h"
+#include "cli.h"
 #include "filepicker.h"
 #include "ifcinfo.h"
 #include "loader.h"
@@ -106,6 +110,37 @@ QString writeFakeIfcConvert(const QTemporaryDir &dir, double seconds = 0) {
                 "cp '" + dir.filePath("fixture.mtl").toUtf8() + "' \"$(dirname \"$last\")/model.mtl\"\n");
     QFile::setPermissions(fake, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
     return fake;
+}
+
+// Runs a command with stdout and stderr in files, and returns what it printed.
+struct Captured {
+    int code = 0;
+    QString out, err;
+};
+Captured capture(const QStringList &arguments) {
+    QTemporaryDir dir;
+    fflush(stdout);
+    fflush(stderr);
+    const int savedOut = dup(fileno(stdout)), savedErr = dup(fileno(stderr));
+    FILE *out = freopen(dir.filePath("out").toLocal8Bit().constData(), "w", stdout);
+    FILE *err = freopen(dir.filePath("err").toLocal8Bit().constData(), "w", stderr);
+    Q_UNUSED(out);
+    Q_UNUSED(err);
+    Captured result;
+    result.code = runCli(QStringList{"keystone"} + arguments);
+    fflush(stdout);
+    fflush(stderr);
+    dup2(savedOut, fileno(stdout));
+    dup2(savedErr, fileno(stderr));
+    close(savedOut);
+    close(savedErr);
+    auto read = [](const QString &path) {
+        QFile file(path);
+        return file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString();
+    };
+    result.out = read(dir.filePath("out"));
+    result.err = read(dir.filePath("err"));
+    return result;
 }
 
 class FakePicker : public FilePicker {
@@ -684,6 +719,65 @@ END-ISO-10303-21;
         QCOMPARE(finished.count(), 1);
         QCOMPARE(failed.count(), 0);
         QCOMPARE(finished.at(0).at(0).value<Loader::Result>().path, dir.filePath("b.ifc"));
+        qunsetenv("KEYSTONE_IFCCONVERT");
+    }
+
+    void cliReportsOnAModel() {
+        QTemporaryDir dir;
+        write(dir.filePath("wall.ifc"), sampleIfc);
+        const QString model = dir.filePath("wall.ifc");
+
+        Captured info = capture({"info", model, "--json"});
+        QCOMPARE(info.code, 0);
+        const QJsonObject summary = QJsonDocument::fromJson(info.out.toUtf8()).object();
+        QCOMPARE(summary.value("schema").toString(), QString("IFC4"));
+        QCOMPARE(summary.value("elements").toInt(), 2);
+        QCOMPARE(summary.value("storeys").toArray().at(1).toObject().value("name").toString(), QString("First floor"));
+
+        Captured walls = capture({"elements", model, "--class", "IfcWall", "--json"});
+        const QJsonArray list = QJsonDocument::fromJson(walls.out.toUtf8()).array();
+        QCOMPARE(list.size(), 1);
+        QCOMPARE(list.at(0).toObject().value("globalId").toString(), QString("3vB2YO$MX4xv5uCqZZG05x"));
+        QCOMPARE(list.at(0).toObject().value("storey").toString(), QString("Ground floor"));
+
+        Captured wall = capture({"properties", model, "3vB2YO$MX4xv5uCqZZG05x", "--json"});
+        const QJsonObject properties = QJsonDocument::fromJson(wall.out.toUtf8()).object();
+        QCOMPARE(properties.value("summary").toObject().value("Material").toString(),
+                 QString("Brick (225 mm), Plaster éclat (15 mm)"));
+        QCOMPARE(properties.value("propertySets").toObject().value("Qto_WallBaseQuantities").toObject()
+                     .value("Length").toString(), QString("5000 mm"));
+
+        Captured missing = capture({"properties", model, "nope"});
+        QCOMPARE(missing.code, 1);
+        QVERIFY(missing.err.contains("has no element nope"));
+        QVERIFY(missing.out.isEmpty());
+        QCOMPARE(capture({"info"}).code, 1);
+        QVERIFY(capture({"help"}).out.contains("properties <model.ifc> <GlobalId>"));
+        QVERIFY(capture({"skill"}).out.contains("name: keystone"));
+    }
+
+    void loaderKeepsTheCacheSmall() {
+        QTemporaryDir dir;
+        qputenv("KEYSTONE_IFCCONVERT", writeFakeIfcConvert(dir).toUtf8());
+        const QString cache = dir.filePath("cache");
+        auto entries = [&cache] { return QDir(cache).entryList(QDir::Dirs | QDir::NoDotAndDotDot).size(); };
+        Loader loader(cache);
+        loader.setCacheLimits(2, qint64(1) << 30);
+        for (int i = 0; i < 3; ++i) {
+            const QString model = dir.filePath(QString("m%1.ifc").arg(i));
+            write(model, sampleIfc);
+            QSignalSpy finished(&loader, &Loader::finished);
+            loader.start(model);
+            QTRY_COMPARE(finished.count(), 1);
+        }
+        QCOMPARE(entries(), 2);
+        // Too little room for even one more: only the newest stays.
+        loader.setCacheLimits(12, 1);
+        write(dir.filePath("m3.ifc"), sampleIfc);
+        QSignalSpy finished(&loader, &Loader::finished);
+        loader.start(dir.filePath("m3.ifc"));
+        QTRY_COMPARE(finished.count(), 1);
+        QCOMPARE(entries(), 1);
         qunsetenv("KEYSTONE_IFCCONVERT");
     }
 
