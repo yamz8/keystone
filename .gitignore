@@ -1,0 +1,6 @@
+/build/
+/vendor/
+/pkgbuild/pkg/
+/pkgbuild/src/
+/pkgbuild/*.zip
+*.pkg.tar.*

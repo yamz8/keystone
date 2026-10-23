@@ -1,0 +1,39 @@
+pkgname=keystone
+pkgver=0.1.0
+pkgrel=1
+_ifcconvert=0.9.0post1
+pkgdesc='Fast native 3D viewer for IFC building models'
+arch=('x86_64' 'aarch64')
+url='https://github.com/yamz8/keystone'
+# Keystone is MIT; the bundled IfcConvert (IfcOpenShell) is LGPL-3.0-or-later.
+license=('MIT' 'LGPL-3.0-or-later')
+depends=('qt6-base' 'qt6-declarative' 'qt6-quick3d' 'qt6-svg' 'qt6-wayland' 'xdg-desktop-portal')
+makedepends=('gcc' 'make')
+# IfcConvert ships stripped, with its own libraries beside it; leave them as
+# IfcOpenShell built them.
+options=('!strip' '!debug')
+source_x86_64=("https://github.com/IfcOpenShell/IfcOpenShell/releases/download/ifcconvert-$_ifcconvert/ifcconvert-$_ifcconvert-linux64.zip")
+source_aarch64=("https://github.com/IfcOpenShell/IfcOpenShell/releases/download/ifcconvert-$_ifcconvert/ifcconvert-$_ifcconvert-linuxarm64.zip")
+sha256sums_x86_64=('7360c7dac5b69ec722b4bf100036c2ab2f96b74fa89ee99d33944e6cbf3ba9d6')
+sha256sums_aarch64=('0f0be070f3cdcaee74059bea5e5301a33cca30b19a73608924b86c0b4b76db3f')
+
+build() {
+  cd "$startdir/.."
+  ./bin/build
+}
+
+package() {
+  cd "$startdir/.."
+  install -Dm755 build/keystone "$pkgdir/usr/bin/keystone"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 "$startdir/keystone.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/keystone.svg"
+  install -Dm644 "$startdir/keystone.desktop" "$pkgdir/usr/share/applications/keystone.desktop"
+  install -Dm644 "$startdir/keystone-mime.xml" "$pkgdir/usr/share/mime/packages/keystone.xml"
+
+  # IfcConvert finds its libraries and plugins beside itself.
+  install -dm755 "$pkgdir/usr/lib/keystone/ifcconvert"
+  cd "$srcdir"
+  for file in IfcConvert *.so *.so.*; do
+    install -m755 "$file" "$pkgdir/usr/lib/keystone/ifcconvert/$file"
+  done
+}

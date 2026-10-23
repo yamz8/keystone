@@ -1,0 +1,31 @@
+#!/bin/sh
+# Downloads IfcOpenShell's IfcConvert into vendor/ifcconvert, where a
+# development build of Keystone looks for it. The package bundles the same
+# release under /usr/lib/keystone/ifcconvert.
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+VERSION=0.9.0post1
+SHA256=7360c7dac5b69ec722b4bf100036c2ab2f96b74fa89ee99d33944e6cbf3ba9d6
+case "$(uname -m)" in
+  x86_64) ARCH=linux64 ;;
+  aarch64) ARCH=linuxarm64 ;;
+  *) echo "IfcConvert has no build for $(uname -m)" >&2; exit 1 ;;
+esac
+ZIP="ifcconvert-$VERSION-$ARCH.zip"
+
+mkdir -p "$ROOT/vendor"
+cd "$ROOT/vendor"
+if [ ! -f "$ZIP" ]; then
+  curl -fL --progress-bar -o "$ZIP.part" \
+    "https://github.com/IfcOpenShell/IfcOpenShell/releases/download/ifcconvert-$VERSION/$ZIP"
+  mv "$ZIP.part" "$ZIP"
+fi
+if [ "$ARCH" = linux64 ]; then
+  echo "$SHA256  $ZIP" | sha256sum -c --quiet
+fi
+rm -rf ifcconvert
+mkdir ifcconvert
+cd ifcconvert
+unzip -q "../$ZIP"
+echo "IfcConvert $VERSION is in $ROOT/vendor/ifcconvert"
