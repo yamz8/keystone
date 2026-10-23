@@ -7,7 +7,8 @@ arch=('x86_64' 'aarch64')
 url='https://github.com/yamz8/keystone'
 # Keystone is MIT; the bundled IfcConvert (IfcOpenShell) is LGPL-3.0-or-later.
 license=('MIT' 'LGPL-3.0-or-later')
-depends=('qt6-base' 'qt6-declarative' 'qt6-quick3d' 'qt6-svg' 'qt6-wayland' 'xdg-desktop-portal')
+install='keystone.install'
+depends=('hicolor-icon-theme' 'qt6-base' 'qt6-declarative' 'qt6-quick3d' 'qt6-svg' 'qt6-wayland' 'shared-mime-info' 'xdg-desktop-portal')
 makedepends=('gcc' 'make')
 # IfcConvert ships stripped, with its own libraries beside it; leave them as
 # IfcOpenShell built them.
@@ -29,6 +30,7 @@ package() {
   install -Dm644 "$startdir/keystone.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/keystone.svg"
   install -Dm644 "$startdir/keystone.desktop" "$pkgdir/usr/share/applications/keystone.desktop"
   install -Dm644 "$startdir/keystone-mime.xml" "$pkgdir/usr/share/mime/packages/keystone.xml"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
 
   # IfcConvert finds its libraries and plugins beside itself.
   install -dm755 "$pkgdir/usr/lib/keystone/ifcconvert"

@@ -64,8 +64,10 @@ Rectangle {
                 font.weight: Font.DemiBold
             }
 
+            // Two pairs of key and action a row on a wide window, so the list
+            // fits a laptop screen's height.
             GridLayout {
-                columns: 2
+                columns: overlay.width > 1000 ? 4 : 2
                 columnSpacing: 28
                 rowSpacing: 8
 
