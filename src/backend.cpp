@@ -21,11 +21,13 @@ Backend::Backend(FilePicker *filePicker, const QString &cacheDirectory, QObject 
         m_mesh->focusBounds(&min, &max);
         m_focusCenter = (min + max) / 2;
         m_focusRadius = (max - min).length() / 2;
-        m_path = m_loadingPath;
+        m_path = result.path;
         m_warning = result.warning;
         m_error.clear();
         emit meshChanged();
         setState(Ready);
+        if (!m_warning.isEmpty())
+            emit notice(m_warning);
     });
     connect(&m_loader, &Loader::failed, this, &Backend::fail);
     connect(&m_loader, &Loader::progressChanged, this, &Backend::loadProgressChanged);
@@ -33,7 +35,7 @@ Backend::Backend(FilePicker *filePicker, const QString &cacheDirectory, QObject 
 
 void Backend::wireFilePicker() {
     connect(m_filePicker, &FilePicker::openSelected, this, &Backend::openUrl);
-    connect(m_filePicker, &FilePicker::failed, this, &Backend::fail);
+    connect(m_filePicker, &FilePicker::failed, this, [this](const QString &message) { reject(QString(), message); });
 }
 
 QString Backend::fileName() const {
@@ -77,8 +79,7 @@ bool Backend::openUrl(const QUrl &url) {
     // Only local files: a remote or network-share URL would reach IfcConvert
     // as something other than the file the user meant.
     if (!url.isLocalFile() || url.toLocalFile().startsWith("//")) {
-        m_loadingPath = url.toString();
-        fail(tr("Keystone opens files on this computer only."));
+        reject(url.toString(), tr("Keystone opens files on this computer only."));
         return false;
     }
     return openPath(url.toLocalFile());
@@ -86,25 +87,39 @@ bool Backend::openUrl(const QUrl &url) {
 
 bool Backend::openPath(const QString &path) {
     const QFileInfo info(path);
-    m_loadingPath = info.absoluteFilePath();
     if (!info.exists()) {
-        fail(tr("%1 doesn't exist.").arg(info.fileName()));
+        reject(info.absoluteFilePath(), tr("%1 doesn't exist.").arg(info.fileName()));
         return false;
     }
     if (!info.isFile() || !info.isReadable()) {
-        fail(tr("%1 can't be read.").arg(info.fileName()));
+        reject(info.absoluteFilePath(), tr("%1 can't be read.").arg(info.fileName()));
         return false;
     }
+    m_loadingPath = info.absoluteFilePath();
     m_error.clear();
     setState(Loading);
     m_loader.start(m_loadingPath);
     return true;
 }
 
+void Backend::reject(const QString &path, const QString &message) {
+    // An open that never started leaves a load in progress, and the file it
+    // names, alone.
+    if (m_state == Loading) {
+        emit notice(message);
+        return;
+    }
+    if (!path.isEmpty())
+        m_loadingPath = path;
+    fail(message);
+}
+
 void Backend::fail(const QString &message) {
     m_error = message;
     // A failed open leaves the model that was already open, if any, alone.
     setState(m_mesh ? Ready : Failed);
+    if (m_mesh)
+        emit notice(message);
 }
 
 void Backend::setState(State state) {

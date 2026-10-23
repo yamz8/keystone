@@ -58,17 +58,14 @@ ApplicationWindow {
         }
     }
 
-    // A message about the open model that didn't stop it opening (a failed
-    // second open, unreadable properties), shown for a while.
+    // A message that doesn't replace the view (a failed second open,
+    // unreadable properties), shown for a while.
     property string notice: ""
     Connections {
         target: backend
-        function onStateChanged() {
-            const message = backend.errorMessage || backend.warning
-            if (backend.state === Backend.Ready && message) {
-                win.notice = message
-                noticeTimer.restart()
-            }
+        function onNotice(message) {
+            win.notice = message
+            noticeTimer.restart()
         }
     }
     Timer { id: noticeTimer; interval: 8000; onTriggered: win.notice = "" }

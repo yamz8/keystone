@@ -172,7 +172,7 @@ void Loader::start(const QString &path) {
         fail(tr("Could not create the cache folder %1.").arg(m_cacheDirectory));
         return;
     }
-    m_work = std::make_unique<QTemporaryDir>(QDir(m_cacheDirectory).filePath(".convert-XXXXXX"));
+    m_work = std::make_shared<QTemporaryDir>(QDir(m_cacheDirectory).filePath(".convert-XXXXXX"));
     if (!m_work->isValid()) {
         fail(tr("Could not create a folder to convert the model in: %1").arg(m_work->errorString()));
         return;
@@ -181,7 +181,7 @@ void Loader::start(const QString &path) {
     m_process.start(ifcConvert, convertArguments(path, m_work->filePath("model.obj")));
 }
 
-void Loader::readMesh(const QString &objPath) {
+void Loader::readMesh(const QString &objPath, std::shared_ptr<QTemporaryDir> keep) {
     const int generation = m_generation;
     m_meshWatcher.disconnect(this);
     connect(&m_meshWatcher, &QFutureWatcher<Parsed<Mesh>>::finished, this, [this, generation] {
@@ -190,7 +190,7 @@ void Loader::readMesh(const QString &objPath) {
         m_meshDone = true;
         maybeFinish();
     });
-    m_meshWatcher.setFuture(QtConcurrent::run([objPath]() {
+    m_meshWatcher.setFuture(QtConcurrent::run([objPath, keep]() {
         Parsed<Mesh> parsed{std::make_shared<Mesh>(), QString()};
         if (!readObj(objPath, parsed.value.get(), &parsed.error))
             parsed.value.reset();
@@ -229,7 +229,7 @@ void Loader::conversionFinished(int exitCode, QProcess::ExitStatus status) {
         pruneCache();
     }
     setProgress(0.95);
-    readMesh(objPath);
+    readMesh(objPath, m_work);
 }
 
 void Loader::maybeFinish() {
@@ -252,6 +252,7 @@ void Loader::maybeFinish() {
     Result result;
     result.mesh = mesh;
     result.info = info;
+    result.path = m_path;
     if (!info)
         result.warning = tr("Properties could not be read from %1: %2").arg(name, infoResult.error);
     m_running = false;
@@ -278,10 +279,11 @@ void Loader::cancel() {
         m_process.kill();
         m_process.waitForFinished(2000);
     }
-    // A worker still reading may be reading from the work folder, so it is
-    // waited for before that goes; its result is dropped by the generation
-    // check.
-    m_infoWatcher.waitForFinished();
-    m_meshWatcher.waitForFinished();
+    // Workers still reading carry on in the background rather than holding
+    // up the window: they share nothing with the loader, the mesh worker
+    // keeps its own hold on the work folder, and the generation check drops
+    // what they find.
+    m_infoWatcher.disconnect(this);
+    m_meshWatcher.disconnect(this);
     m_work.reset();
 }

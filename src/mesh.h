@@ -37,6 +37,18 @@ struct Mesh {
     QVector<QVector3D> positions;
     QVector<QVector3D> normals;
     QVector3D min, max;
+    // A bounding-volume hierarchy over every triangle, built once when the
+    // mesh is read, so picking under the pointer stays quick on models with
+    // millions of triangles. A node with a count is a leaf over that run of
+    // triangleOrder; the others have two children.
+    struct Node {
+        QVector3D min, max;
+        int left = -1, right = -1;
+        int first = 0, count = 0;
+    };
+    QVector<Node> nodes;
+    QVector<int> triangleOrder;   // first vertex of each triangle, in node order
+    QVector<int> triangleElement; // element of the triangle at vertex / 3
     // Where the scene origin sits in the file's own coordinates (Z up).
     double originX = 0, originY = 0, originZ = 0;
 
@@ -49,6 +61,7 @@ struct Mesh {
     // which would otherwise shrink the building to a dot.
     void focusBounds(QVector3D *min, QVector3D *max) const;
 
+    void buildIndex();
     // The nearest element a ray through the scene meets, by its triangles.
     Hit pick(const QVector3D &origin, const QVector3D &direction) const;
     // Surface area and enclosed volume of an element's triangles, in m² and

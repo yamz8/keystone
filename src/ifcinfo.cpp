@@ -332,18 +332,7 @@ QVector<IfcInfo::Section> IfcInfo::propertySets(qint64 definition) const {
             const QByteArray propertyType = m_file.type(property);
             const auto p = m_file.arguments(property);
             const QString label = prefix + attribute(p, 0);
-            auto unitOf = [&](int index) {
-                const qint64 unit = refAt(p, index);
-                if (!unit)
-                    return QString();
-                const auto u = m_file.arguments(unit);
-                const QByteArray unitType = m_file.type(unit);
-                if (unitType == "IFCSIUNIT" && u.size() >= 4)
-                    return siSymbol(u.at(2).text, u.at(3).text);
-                if (unitType == "IFCCONVERSIONBASEDUNIT" && u.size() >= 3)
-                    return conversionSymbol(u.at(2).string());
-                return QString();
-            };
+            auto unitOf = [&](int index) { return unitSymbol(refAt(p, index)); };
             if (propertyType == "IFCPROPERTYSINGLEVALUE" && p.size() > 2) {
                 section.rows.append({label, valueText(p.at(2), unitOf(3))});
             } else if ((propertyType == "IFCPROPERTYENUMERATEDVALUE" || propertyType == "IFCPROPERTYLISTVALUE") && p.size() > 2) {
@@ -360,27 +349,9 @@ QVector<IfcInfo::Section> IfcInfo::propertySets(qint64 definition) const {
             addProperty(property, QString(), 0);
     } else if (type == "IFCELEMENTQUANTITY") {
         for (const qint64 quantity : refsAt(args, 5)) {
-            const QByteArray quantityType = m_file.type(quantity);
-            const auto q = m_file.arguments(quantity);
-            if (q.size() < 4 || !q.at(3).unwrapped().isNumber())
-                continue;
-            static const QHash<QByteArray, QString> kinds = {
-                {"IFCQUANTITYLENGTH", "LENGTHUNIT"}, {"IFCQUANTITYAREA", "AREAUNIT"},
-                {"IFCQUANTITYVOLUME", "VOLUMEUNIT"}, {"IFCQUANTITYWEIGHT", "MASSUNIT"},
-                {"IFCQUANTITYTIME", "TIMEUNIT"}, {"IFCQUANTITYCOUNT", QString()},
-            };
-            if (!kinds.contains(quantityType))
-                continue;
-            QString unit = m_units.symbols.value(kinds.value(quantityType));
-            if (const qint64 own = refAt(q, 2)) {
-                const auto u = m_file.arguments(own);
-                if (m_file.type(own) == "IFCSIUNIT" && u.size() >= 4)
-                    unit = siSymbol(u.at(2).text, u.at(3).text);
-                else if (m_file.type(own) == "IFCCONVERSIONBASEDUNIT" && u.size() >= 3)
-                    unit = conversionSymbol(u.at(2).string());
-            }
-            const QString number = formatNumber(q.at(3).unwrapped().number);
-            section.rows.append({attribute(q, 0), unit.isEmpty() ? number : number + " " + unit});
+            const QString text = quantityText(quantity);
+            if (!text.isEmpty())
+                section.rows.append({attribute(m_file.arguments(quantity), 0), text});
         }
     } else {
         return {};
@@ -392,6 +363,36 @@ QVector<IfcInfo::Section> IfcInfo::propertySets(qint64 definition) const {
     if (section.rows.isEmpty())
         return {};
     return {section};
+}
+
+QString IfcInfo::unitSymbol(qint64 unit) const {
+    if (!unit)
+        return QString();
+    const auto u = m_file.arguments(unit);
+    const QByteArray type = m_file.type(unit);
+    if (type == "IFCSIUNIT" && u.size() >= 4)
+        return siSymbol(u.at(2).text, u.at(3).text);
+    if (type == "IFCCONVERSIONBASEDUNIT" && u.size() >= 3)
+        return conversionSymbol(u.at(2).string());
+    return QString();
+}
+
+QString IfcInfo::quantityText(qint64 quantity) const {
+    static const QHash<QByteArray, QString> kinds = {
+        {"IFCQUANTITYLENGTH", "LENGTHUNIT"}, {"IFCQUANTITYAREA", "AREAUNIT"},
+        {"IFCQUANTITYVOLUME", "VOLUMEUNIT"}, {"IFCQUANTITYWEIGHT", "MASSUNIT"},
+        {"IFCQUANTITYTIME", "TIMEUNIT"}, {"IFCQUANTITYCOUNT", QString()},
+    };
+    const QByteArray type = m_file.type(quantity);
+    const auto q = m_file.arguments(quantity);
+    if (!kinds.contains(type) || q.size() < 4 || !q.at(3).unwrapped().isNumber())
+        return QString();
+    // A quantity's own unit wins over the project's.
+    QString unit = unitSymbol(refAt(q, 2));
+    if (unit.isEmpty())
+        unit = m_units.symbols.value(kinds.value(type));
+    const QString number = formatNumber(q.at(3).unwrapped().number);
+    return unit.isEmpty() ? number : number + " " + unit;
 }
 
 IfcInfo::Details IfcInfo::describe(const QString &globalId) const {
@@ -427,8 +428,11 @@ IfcInfo::Details IfcInfo::describe(const QString &globalId, const Measured &meas
     if (const qint64 storey = storeyOf(id)) {
         add(tr("Storey"), name(storey));
     } else {
+        // Bounded like storeyOf(), so an aggregation cycle in a broken file
+        // can't hang the window.
         qint64 container = m_containedIn.value(id, 0);
-        for (qint64 up = m_parentOf.value(id, 0); !container && up; up = m_parentOf.value(up, 0))
+        qint64 up = m_parentOf.value(id, 0);
+        for (int depth = 0; !container && up && depth < 64; ++depth, up = m_parentOf.value(up, 0))
             container = m_containedIn.value(up, 0);
         if (container)
             add(tr("Located in"), name(container));
@@ -463,11 +467,10 @@ IfcInfo::Details IfcInfo::describe(const QString &globalId, const Measured &meas
             for (const qint64 quantity : refsAt(m_file.arguments(definition), 5)) {
                 if (m_file.type(quantity) != quantityType)
                     continue;
-                const auto q = m_file.arguments(quantity);
-                if (q.size() < 4 || !q.at(3).unwrapped().isNumber())
+                const QString text = quantityText(quantity);
+                if (text.isEmpty())
                     continue;
-                const QString text = formatNumber(q.at(3).unwrapped().number) + " "
-                    + m_units.symbols.value(quantityType == "IFCQUANTITYAREA" ? "AREAUNIT" : "VOLUMEUNIT");
+                const auto q = m_file.arguments(quantity);
                 // The most preferred name wins; any other name only fills in.
                 const int rank = preferred.indexOf(attribute(q, 0));
                 if (best.isEmpty() || (rank >= 0 && (bestRank < 0 || rank < bestRank))) {

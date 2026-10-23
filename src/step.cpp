@@ -2,6 +2,7 @@
 
 #include <QFile>
 #include <QRegularExpression>
+#include <QUtf8StringView>
 
 namespace Step {
 
@@ -219,15 +220,18 @@ QString decodeString(const QByteArray &raw) {
             // Code page switches; this reader treats every page as Latin-1.
             p += 4;
         } else {
-            // IFC files are ASCII by the standard, but many exporters write
-            // UTF-8 directly; take the longest valid UTF-8 run.
+            // IFC files are ASCII by the standard, but exporters write raw
+            // UTF-8 or raw ISO 8859-1 too; a run that isn't valid UTF-8 is
+            // read as Latin-1, so "Wärme" never turns into replacement marks.
             const char *start = p;
             while (p < end && *p != '\\' && *p != '\'')
                 ++p;
-            if (p == start)
+            if (p == start) {
                 out += QLatin1Char(*p++);
-            else
-                out += QString::fromUtf8(start, p - start);
+            } else {
+                const QByteArrayView run(start, p - start);
+                out += QUtf8StringView(run).isValidUtf8() ? QString::fromUtf8(run) : QString::fromLatin1(run);
+            }
         }
     }
     return out;

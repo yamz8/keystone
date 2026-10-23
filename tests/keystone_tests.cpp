@@ -1,4 +1,5 @@
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -84,6 +85,23 @@ void write(const QString &path, const QByteArray &contents) {
     QFile file(path);
     QVERIFY(file.open(QIODevice::WriteOnly));
     file.write(contents);
+}
+
+// A stand-in IfcConvert that takes `seconds`, draws a progress bar, copies
+// the cube OBJ to the output path it's given, and counts its runs.
+QString writeFakeIfcConvert(const QTemporaryDir &dir, double seconds = 0) {
+    write(dir.filePath("fixture.mtl"), cubeMtl);
+    write(dir.filePath("fixture.obj"), cubeObj("model.mtl"));
+    const QString fake = dir.filePath("IfcConvert");
+    write(fake, "#!/bin/sh\n"
+                "echo run >> '" + dir.filePath("runs").toUtf8() + "'\n"
+                "sleep " + QByteArray::number(seconds) + "\n"
+                "for last; do :; done\n"
+                "printf 'Creating geometry...\\n\\r[#########################                         ]'\n"
+                "cp '" + dir.filePath("fixture.obj").toUtf8() + "' \"$last\"\n"
+                "cp '" + dir.filePath("fixture.mtl").toUtf8() + "' \"$(dirname \"$last\")/model.mtl\"\n");
+    QFile::setPermissions(fake, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+    return fake;
 }
 
 class FakePicker : public FilePicker {
@@ -202,6 +220,13 @@ private slots:
         QCOMPARE(Step::decodeString("a\\\\b"), QString("a\\b"));
     }
 
+    void stepReadsLatin1Bytes() {
+        // Raw ISO 8859-1 from an exporter that ignores the escapes, and raw
+        // UTF-8 from one that writes it directly.
+        QCOMPARE(Step::decodeString("W\xe4rmed\xe4mmung"), QString::fromUtf8("Wärmedämmung"));
+        QCOMPARE(Step::decodeString("W\xc3\xa4rme"), QString::fromUtf8("Wärme"));
+    }
+
     void stepParsesArguments() {
         const QByteArray text = "'abc',$,*,#12,.T.,(1,2.5,-3.E-2),IFCLABEL('x'),(#1,#2)";
         const Step::Arguments args = Step::parseArguments(text.constData(), text.constData() + text.size());
@@ -260,6 +285,50 @@ private slots:
         QCOMPARE(rows.value("Pset_WallCommon (type)/IsExternal"), QString("No"));
         QCOMPARE(rows.value("Pset_WallCommon (type)/FireRating"), QString("REI 90"));
         QCOMPARE(rows.value("Pset_WallCommon (type)/Width"), QString("240 mm"));
+    }
+
+    void ifcInfoSurvivesAggregationCycles() {
+        // Two assemblies that each claim the other, in no container.
+        const QByteArray cyclic = R"(ISO-10303-21;
+HEADER;
+FILE_SCHEMA(('IFC4'));
+ENDSEC;
+DATA;
+#1=IFCELEMENTASSEMBLY('1AAAAAAAAAAAAAAAAAAAAA',$,'A',$,$,$,$,$,$,$);
+#2=IFCELEMENTASSEMBLY('2BBBBBBBBBBBBBBBBBBBBB',$,'B',$,$,$,$,$,$,$);
+#3=IFCRELAGGREGATES('3CCCCCCCCCCCCCCCCCCCCC',$,$,$,#1,(#2));
+#4=IFCRELAGGREGATES('4DDDDDDDDDDDDDDDDDDDDD',$,$,$,#2,(#1));
+ENDSEC;
+END-ISO-10303-21;
+)";
+        IfcInfo info;
+        QVERIFY(info.parse(cyclic));
+        const IfcInfo::Details details = info.describe("1AAAAAAAAAAAAAAAAAAAAA");
+        QVERIFY(details.found);
+        QCOMPARE(details.name, QString("A"));
+    }
+
+    void ifcInfoUsesAQuantitysOwnUnit() {
+        // A quantity in square feet, in a project measured in square metres.
+        QByteArray feet = sampleIfc;
+        feet.replace("#42=IFCQUANTITYAREA('NetSideArea',$,$,12.5,$);",
+                     "#42=IFCQUANTITYAREA('NetSideArea',$,#45,120.,$);\n"
+                     "#45=IFCCONVERSIONBASEDUNIT(#46,.AREAUNIT.,'square foot',#47);\n"
+                     "#46=IFCDIMENSIONALEXPONENTS(2,0,0,0,0,0,0);\n"
+                     "#47=IFCMEASUREWITHUNIT(IFCAREAMEASURE(0.0929),#4);");
+        IfcInfo info;
+        QVERIFY(info.parse(feet));
+        const IfcInfo::Details details = info.describe("3vB2YO$MX4xv5uCqZZG05x");
+        QString area, row;
+        for (const IfcInfo::Row &r : details.summary)
+            if (r.label == "Area")
+                area = r.value;
+        for (const IfcInfo::Section &section : details.sections)
+            for (const IfcInfo::Row &r : section.rows)
+                if (r.label == "NetSideArea")
+                    row = r.value;
+        QCOMPARE(area, QString("120 ft²"));
+        QCOMPARE(row, QString("120 ft²"));
     }
 
     void ifcInfoFallsBackToMeasuredQuantities() {
@@ -340,6 +409,42 @@ private slots:
         QCOMPARE(mesh.pick(QVector3D(-50, 10, z), QVector3D(1, 0, 0)).element, -1);
     }
 
+    void meshPicksAcrossManyElements() {
+        // A grid of cubes, enough for the picking tree to split many times:
+        // a ray straight down onto each cube finds that one.
+        QTemporaryDir dir;
+        QByteArray obj;
+        int base = 0;
+        for (int x = 0; x < 15; ++x)
+            for (int y = 0; y < 15; ++y) {
+                obj += "g element-" + QByteArray::number(x * 15 + y) + "\n";
+                for (int i = 0; i < 8; ++i)
+                    obj += "v " + QByteArray::number(x * 2 + (i & 1 ? 1 : 0)) + " "
+                           + QByteArray::number(y * 2 + (i & 2 ? 1 : 0)) + " " + QByteArray::number(i & 4 ? 1 : 0) + "\n";
+                const int faces[12][3] = {{0, 2, 1}, {1, 2, 3}, {4, 5, 6}, {5, 7, 6}, {0, 1, 4}, {1, 5, 4},
+                                          {2, 6, 3}, {3, 6, 7}, {0, 4, 2}, {2, 4, 6}, {1, 3, 5}, {3, 7, 5}};
+                for (const auto &f : faces)
+                    obj += "f " + QByteArray::number(base + f[0] + 1) + " " + QByteArray::number(base + f[1] + 1) + " "
+                           + QByteArray::number(base + f[2] + 1) + "\n";
+                base += 8;
+            }
+        write(dir.filePath("grid.obj"), obj);
+        Mesh mesh;
+        QVERIFY(readObj(dir.filePath("grid.obj"), &mesh));
+        QCOMPARE(mesh.elements.size(), 225);
+        QVERIFY(mesh.nodes.size() > 50);
+        for (int e = 0; e < mesh.elements.size(); ++e) {
+            const QVector3D c = (mesh.elements.at(e).min + mesh.elements.at(e).max) / 2;
+            const Mesh::Hit hit = mesh.pick(c + QVector3D(0, 50, 0), QVector3D(0, -1, 0));
+            QCOMPARE(mesh.elements.at(hit.element).globalId, mesh.elements.at(e).globalId);
+            QVERIFY(qAbs(hit.point.y() - mesh.elements.at(e).max.y()) < 1e-4f);
+        }
+        // Between the cubes, nothing.
+        const Mesh::Element &first = mesh.elements.at(0), &next = mesh.elements.at(15);
+        const QVector3D gap((first.max.x() + next.min.x()) / 2, 50, (first.min.z() + first.max.z()) / 2);
+        QCOMPARE(mesh.pick(gap, QVector3D(0, -1, 0)).element, -1);
+    }
+
     void meshMeasuresElements() {
         QTemporaryDir dir;
         write(dir.filePath("m.mtl"), cubeMtl);
@@ -389,20 +494,9 @@ private slots:
     }
 
     void backendOpensConvertsAndCaches() {
-        // A stand-in IfcConvert that draws a progress bar, copies a known OBJ
-        // to the output path it's given, and counts its runs.
         QTemporaryDir dir;
         write(dir.filePath("wall.ifc"), sampleIfc);
-        write(dir.filePath("fixture.mtl"), cubeMtl);
-        write(dir.filePath("fixture.obj"), cubeObj("model.mtl"));
-        const QString fake = dir.filePath("IfcConvert");
-        write(fake, "#!/bin/sh\n"
-                    "echo run >> '" + dir.filePath("runs").toUtf8() + "'\n"
-                    "for last; do :; done\n"
-                    "printf 'Creating geometry...\\n\\r[#########################                         ]'\n"
-                    "cp '" + dir.filePath("fixture.obj").toUtf8() + "' \"$last\"\n"
-                    "cp '" + dir.filePath("fixture.mtl").toUtf8() + "' \"$(dirname \"$last\")/model.mtl\"\n");
-        QVERIFY(QFile::setPermissions(fake, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+        const QString fake = writeFakeIfcConvert(dir);
         qputenv("KEYSTONE_IFCCONVERT", fake.toUtf8());
 
         auto *picker = new FakePicker();
@@ -442,6 +536,49 @@ private slots:
         QVERIFY(runs.open(QIODevice::ReadOnly));
         QCOMPARE(runs.readAll().count('\n'), 1);
         QCOMPARE(backend.selectedElement(), -1);
+        qunsetenv("KEYSTONE_IFCCONVERT");
+    }
+
+    void backendKeepsLoadingThroughAFailedOpen() {
+        // A second open that fails while the first is converting leaves the
+        // first alone: still loading, and named right once it's done.
+        QTemporaryDir dir;
+        write(dir.filePath("wall.ifc"), sampleIfc);
+        qputenv("KEYSTONE_IFCCONVERT", writeFakeIfcConvert(dir, 0.5).toUtf8());
+        Backend backend(new FakePicker(), dir.filePath("cache"));
+        QSignalSpy notices(&backend, &Backend::notice);
+        QVERIFY(backend.openPath(dir.filePath("wall.ifc")));
+        QVERIFY(!backend.openPath(dir.filePath("gone.ifc")));
+        QVERIFY(!backend.openUrl(QUrl("https://example.com/x.ifc")));
+        QCOMPARE(backend.state(), Backend::Loading);
+        QCOMPARE(notices.count(), 2);
+        QCOMPARE(notices.at(0).at(0).toString(), QString("gone.ifc doesn't exist."));
+        QTRY_COMPARE_WITH_TIMEOUT(backend.state(), Backend::Ready, 10000);
+        QCOMPARE(backend.fileName(), QString("wall.ifc"));
+        QCOMPARE(backend.filePath(), dir.filePath("wall.ifc"));
+        qunsetenv("KEYSTONE_IFCCONVERT");
+    }
+
+    void loaderDropsACancelledLoad() {
+        // Starting again while a conversion runs neither waits for it nor
+        // reports it.
+        QTemporaryDir dir;
+        write(dir.filePath("a.ifc"), sampleIfc);
+        write(dir.filePath("b.ifc"), sampleIfc + "\n");
+        qputenv("KEYSTONE_IFCCONVERT", writeFakeIfcConvert(dir, 0.3).toUtf8());
+        Loader loader(dir.filePath("cache"));
+        QSignalSpy finished(&loader, &Loader::finished);
+        QSignalSpy failed(&loader, &Loader::failed);
+        loader.start(dir.filePath("a.ifc"));
+        QElapsedTimer timer;
+        timer.start();
+        loader.start(dir.filePath("b.ifc"));
+        QVERIFY(timer.elapsed() < 250);
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 10000);
+        QTest::qWait(500);
+        QCOMPARE(finished.count(), 1);
+        QCOMPARE(failed.count(), 0);
+        QCOMPARE(finished.at(0).at(0).value<Loader::Result>().path, dir.filePath("b.ifc"));
         qunsetenv("KEYSTONE_IFCCONVERT");
     }
 

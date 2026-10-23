@@ -59,15 +59,18 @@ Item {
 
     function zoom(factor, x, y) {
         frameAnimation.stop()
-        if (x !== undefined) {
+        const newDistance = clamp(distance * factor, radius * 0.002 + 0.05, sceneRadius * 40)
+        // What the clamp leaves of the step; at the limit nothing moves.
+        const actual = newDistance / distance
+        if (x !== undefined && actual !== 1) {
             // Towards the point under the pointer, which then stays put on
             // screen: the target moves as far towards it as the camera does.
             const r = ray(x, y)
             const hit = backend.hitPoint(r.near, r.far)
             if (hit !== undefined && hit !== null)
-                target = target.plus(hit.minus(target).times(1 - factor))
+                target = target.plus(hit.minus(target).times(1 - actual))
         }
-        distance = clamp(distance * factor, radius * 0.002 + 0.05, sceneRadius * 40)
+        distance = newDistance
     }
 
     // The camera's axes in the scene, from the same yaw-then-pitch the
@@ -171,7 +174,6 @@ Item {
                 geometry: MeshGeometry {
                     backend: root.source
                     material: index
-                    hiddenElement: root.source.selectedElement
                 }
                 materials: PrincipledMaterial {
                     baseColor: modelData.color
@@ -191,12 +193,12 @@ Item {
                 backend: root.source
                 element: root.source.selectedElement
             }
-            materials: PrincipledMaterial {
-                baseColor: theme.accent
-                emissiveFactor: Qt.vector3d(0.25, 0.25, 0.25)
+            materials: CustomMaterial {
+                property color accent: theme.accent
+                shadingMode: CustomMaterial.Shaded
                 cullMode: Material.NoCulling
-                roughness: 0.6
-                metalness: 0
+                vertexShader: "qrc:/selection.vert"
+                fragmentShader: "qrc:/selection.frag"
             }
         }
     }

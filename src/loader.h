@@ -22,6 +22,8 @@ public:
     struct Result {
         std::shared_ptr<const Mesh> mesh;
         std::shared_ptr<const IfcInfo> info;
+        // The file this is, which a later open may already have moved on from.
+        QString path;
         // Something the user should know that didn't stop the model opening.
         QString warning;
     };
@@ -54,7 +56,8 @@ signals:
 
 private:
     QString cacheKey(const QString &path, const QString &ifcConvert) const;
-    void readMesh(const QString &objPath);
+    // `keep` holds the folder the OBJ is in until the worker is done with it.
+    void readMesh(const QString &objPath, std::shared_ptr<QTemporaryDir> keep = {});
     void pruneCache();
     void setProgress(double progress);
     void conversionFinished(int exitCode, QProcess::ExitStatus status);
@@ -68,7 +71,7 @@ private:
     QString m_cacheEntry;
     // Where IfcConvert writes, inside the cache, renamed to the entry once
     // it has finished so a half-written model is never taken for a cached one.
-    std::unique_ptr<QTemporaryDir> m_work;
+    std::shared_ptr<QTemporaryDir> m_work;
     QByteArray m_output;
     bool m_creatingGeometry = true;
     QProcess m_process;

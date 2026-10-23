@@ -84,11 +84,17 @@ signals:
     void meshChanged();
     void selectionChanged();
     void loadProgressChanged();
+    // Something to tell the user that doesn't replace what's on screen: an
+    // open that failed while a model is shown or another is opening, or a
+    // warning about the model that just opened.
+    void notice(const QString &message);
 
 private:
     void wireFilePicker();
     void setState(State state);
     void fail(const QString &message);
+    // An open refused before it started, for the file at path.
+    void reject(const QString &path, const QString &message);
 
     FilePicker *m_filePicker = nullptr;
     Loader m_loader;

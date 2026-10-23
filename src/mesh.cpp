@@ -4,6 +4,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QVarLengthArray>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -106,30 +107,101 @@ bool rayHitsTriangle(const QVector3D &origin, const QVector3D &direction, const 
 
 }
 
+void Mesh::buildIndex() {
+    nodes.clear();
+    triangleOrder.clear();
+    triangleElement.fill(-1, positions.size() / 3);
+    for (int e = 0; e < elements.size(); ++e)
+        for (const Part &part : elements.at(e).parts)
+            for (int i = part.first; i + 2 < part.first + part.count; i += 3) {
+                triangleElement[i / 3] = e;
+                triangleOrder.append(i);
+            }
+    if (triangleOrder.isEmpty())
+        return;
+
+    QVector<QVector3D> centroids(positions.size() / 3);
+    for (const int i : std::as_const(triangleOrder))
+        centroids[i / 3] = (positions.at(i) + positions.at(i + 1) + positions.at(i + 2)) / 3;
+
+    // Split each node's triangles at the median of its longest axis, until
+    // a handful are left.
+    constexpr int leafSize = 8;
+    nodes.reserve(2 * triangleOrder.size() / leafSize + 1);
+    nodes.append(Node{{}, {}, -1, -1, 0, int(triangleOrder.size())});
+    QVector<int> pending{0};
+    while (!pending.isEmpty()) {
+        const int index = pending.takeLast();
+        const int first = nodes.at(index).first, count = nodes.at(index).count;
+        QVector3D lo(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
+        QVector3D hi = -lo, clo = lo, chi = hi;
+        for (int t = first; t < first + count; ++t) {
+            const int i = triangleOrder.at(t);
+            for (int k = 0; k < 3; ++k)
+                for (int axis = 0; axis < 3; ++axis) {
+                    lo[axis] = std::min(lo[axis], positions.at(i + k)[axis]);
+                    hi[axis] = std::max(hi[axis], positions.at(i + k)[axis]);
+                }
+            for (int axis = 0; axis < 3; ++axis) {
+                clo[axis] = std::min(clo[axis], centroids.at(i / 3)[axis]);
+                chi[axis] = std::max(chi[axis], centroids.at(i / 3)[axis]);
+            }
+        }
+        nodes[index].min = lo;
+        nodes[index].max = hi;
+        if (count <= leafSize)
+            continue;
+        const QVector3D extent = chi - clo;
+        const int axis = extent.x() >= extent.y() && extent.x() >= extent.z() ? 0 : extent.y() >= extent.z() ? 1 : 2;
+        const int middle = first + count / 2;
+        std::nth_element(triangleOrder.begin() + first, triangleOrder.begin() + middle,
+                         triangleOrder.begin() + first + count, [&centroids, axis](int a, int b) {
+                             return centroids.at(a / 3)[axis] < centroids.at(b / 3)[axis];
+                         });
+        const int left = int(nodes.size());
+        nodes.append(Node{{}, {}, -1, -1, first, middle - first});
+        nodes.append(Node{{}, {}, -1, -1, middle, first + count - middle});
+        nodes[index].left = left;
+        nodes[index].right = left + 1;
+        nodes[index].count = 0;
+        pending.append(left);
+        pending.append(left + 1);
+    }
+}
+
 Mesh::Hit Mesh::pick(const QVector3D &origin, const QVector3D &rayDirection) const {
     Hit hit;
     const QVector3D direction = rayDirection.normalized();
-    if (direction.isNull())
+    if (direction.isNull() || nodes.isEmpty())
         return hit;
     auto invert = [](float v) { return v == 0 ? std::numeric_limits<float>::infinity() : 1.0f / v; };
     const QVector3D inverse(invert(direction.x()), invert(direction.y()), invert(direction.z()));
     float best = std::numeric_limits<float>::max();
-    for (int e = 0; e < elements.size(); ++e) {
-        const Element &element = elements.at(e);
-        if (!rayHitsBox(origin, inverse, element.min, element.max, best))
+    int bestTriangle = -1;
+    // Only nodes the ray enters before the nearest hit so far are opened.
+    QVarLengthArray<int, 64> stack{0};
+    while (!stack.isEmpty()) {
+        const Node &node = nodes.at(stack.last());
+        stack.removeLast();
+        if (!rayHitsBox(origin, inverse, node.min, node.max, best))
             continue;
-        for (const Part &part : element.parts) {
-            for (int i = part.first; i + 2 < part.first + part.count; i += 3) {
-                float t = 0;
-                if (rayHitsTriangle(origin, direction, positions.at(i), positions.at(i + 1), positions.at(i + 2), &t)
-                    && t < best) {
-                    best = t;
-                    hit.element = e;
-                }
+        if (node.count == 0) {
+            stack.append(node.left);
+            stack.append(node.right);
+            continue;
+        }
+        for (int t = node.first; t < node.first + node.count; ++t) {
+            const int i = triangleOrder.at(t);
+            float distance = 0;
+            if (rayHitsTriangle(origin, direction, positions.at(i), positions.at(i + 1), positions.at(i + 2), &distance)
+                && distance < best) {
+                best = distance;
+                bestTriangle = i;
             }
         }
     }
-    if (hit.element >= 0) {
+    if (bestTriangle >= 0) {
+        hit.element = triangleElement.at(bestTriangle / 3);
         hit.distance = best;
         hit.point = origin + direction * best;
     }
@@ -406,6 +478,7 @@ bool readObj(const QString &path, Mesh *mesh, QString *error) {
         kept.append(e);
     }
     mesh->elements = kept;
+    mesh->buildIndex();
     if (!mesh->elements.isEmpty()) {
         mesh->min = mesh->elements.first().min;
         mesh->max = mesh->elements.first().max;

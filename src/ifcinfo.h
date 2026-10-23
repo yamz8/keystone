@@ -65,6 +65,9 @@ private:
     QString materialText(qint64 id, int depth = 0) const;
     QString valueText(const Step::Value &value, const QString &unitHint = {}) const;
     QString unitFor(const QString &measureType) const;
+    QString unitSymbol(qint64 unit) const;
+    // A quantity's value with its unit, or empty when it has no number.
+    QString quantityText(qint64 quantity) const;
     qint64 storeyOf(qint64 id) const;
     QVector<Section> propertySets(qint64 definition) const;
 

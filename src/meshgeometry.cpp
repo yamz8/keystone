@@ -11,9 +11,9 @@ void MeshGeometry::setBackend(Backend *backend) {
         disconnect(m_meshConnection);
     m_backend = backend;
     if (m_backend)
-        m_meshConnection = connect(m_backend, &Backend::meshChanged, this, &MeshGeometry::rebuild);
+        m_meshConnection = connect(m_backend, &Backend::meshChanged, this, &MeshGeometry::scheduleRebuild);
     emit backendChanged();
-    rebuild();
+    scheduleRebuild();
 }
 
 void MeshGeometry::setMaterial(int material) {
@@ -21,7 +21,7 @@ void MeshGeometry::setMaterial(int material) {
         return;
     m_material = material;
     emit materialChanged();
-    rebuild();
+    scheduleRebuild();
 }
 
 void MeshGeometry::setElement(int element) {
@@ -29,32 +29,18 @@ void MeshGeometry::setElement(int element) {
         return;
     m_element = element;
     emit elementChanged();
-    rebuild();
+    scheduleRebuild();
 }
 
-void MeshGeometry::setHiddenElement(int element) {
-    if (m_hiddenElement == element)
+void MeshGeometry::scheduleRebuild() {
+    if (m_rebuildPending)
         return;
-    // Only the materials the old or new element uses change; every other
-    // batch keeps its buffer, so selecting stays quick on large models.
-    const bool affected = drawsElement(m_hiddenElement) || drawsElement(element);
-    m_hiddenElement = element;
-    emit hiddenElementChanged();
-    if (affected)
-        rebuild();
-}
-
-bool MeshGeometry::drawsElement(int element) const {
-    const Mesh *mesh = m_backend ? m_backend->mesh() : nullptr;
-    if (!mesh || element < 0 || element >= mesh->elements.size() || m_element >= 0 || m_material < 0)
-        return false;
-    for (const Mesh::Part &part : mesh->elements.at(element).parts)
-        if (part.material == m_material)
-            return true;
-    return false;
+    m_rebuildPending = true;
+    QMetaObject::invokeMethod(this, &MeshGeometry::rebuild, Qt::QueuedConnection);
 }
 
 void MeshGeometry::rebuild() {
+    m_rebuildPending = false;
     clear();
     m_vertexCount = 0;
     const Mesh *mesh = m_backend ? m_backend->mesh() : nullptr;
@@ -84,7 +70,7 @@ void MeshGeometry::rebuild() {
         } else if (m_element < 0 && m_material >= 0) {
             for (int e = 0; e < mesh->elements.size(); ++e)
                 for (const Mesh::Part &part : mesh->elements.at(e).parts)
-                    if (e != m_hiddenElement && part.material == m_material)
+                    if (part.material == m_material)
                         addPart(part);
         }
     }
