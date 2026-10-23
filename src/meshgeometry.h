@@ -16,6 +16,11 @@ class MeshGeometry : public QQuick3DGeometry {
     // Only this element's triangles, in every material, when it's 0 or
     // more; with neither an element nor a material nothing is drawn.
     Q_PROPERTY(int element READ element WRITE setElement NOTIFY elementChanged)
+    // Every element X-ray has ghosted, in any material, for one faint Model;
+    // material batches leave ghosted and hidden elements out.
+    Q_PROPERTY(bool ghosts READ ghosts WRITE setGhosts NOTIFY ghostsChanged)
+    // How many vertices the geometry holds, so an empty batch can be hidden.
+    Q_PROPERTY(int vertexCount READ vertexCount NOTIFY vertexCountChanged)
 
 public:
     explicit MeshGeometry(QQuick3DObject *parent = nullptr);
@@ -26,6 +31,8 @@ public:
     void setMaterial(int material);
     int element() const { return m_element; }
     void setElement(int element);
+    bool ghosts() const { return m_ghosts; }
+    void setGhosts(bool ghosts);
 
     int vertexCount() const { return m_vertexCount; }
 
@@ -33,6 +40,8 @@ signals:
     void backendChanged();
     void materialChanged();
     void elementChanged();
+    void ghostsChanged();
+    void vertexCountChanged();
 
 private:
     // Rebuilds once the current change has settled: a new model replaces the
@@ -43,8 +52,10 @@ private:
 
     QPointer<Backend> m_backend;
     QMetaObject::Connection m_meshConnection;
+    QMetaObject::Connection m_visibilityConnection;
     int m_material = -1;
     int m_element = -1;
+    bool m_ghosts = false;
     int m_vertexCount = 0;
     bool m_rebuildPending = false;
 };

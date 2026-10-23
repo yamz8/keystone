@@ -3,6 +3,8 @@
 #include <QColor>
 #include <QString>
 #include <QVector3D>
+#include <QVector4D>
+#include <functional>
 #include <QVector>
 
 // The model's triangles, as IfcConvert writes them to Wavefront OBJ with one
@@ -62,8 +64,11 @@ struct Mesh {
     void focusBounds(QVector3D *min, QVector3D *max) const;
 
     void buildIndex();
-    // The nearest element a ray through the scene meets, by its triangles.
-    Hit pick(const QVector3D &origin, const QVector3D &direction) const;
+    // The nearest element a ray through the scene meets, by its triangles,
+    // among those `accept` allows, and only where a point is on the kept
+    // side of `clip` (dot(normal, p) <= w) when there is one.
+    Hit pick(const QVector3D &origin, const QVector3D &direction,
+             const std::function<bool(int element)> &accept = {}, const QVector4D *clip = nullptr) const;
     // Surface area and enclosed volume of an element's triangles, in m² and
     // m³; the volume is only meaningful for a closed solid.
     double surfaceArea(int element) const;

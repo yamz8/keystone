@@ -169,7 +169,8 @@ void Mesh::buildIndex() {
     }
 }
 
-Mesh::Hit Mesh::pick(const QVector3D &origin, const QVector3D &rayDirection) const {
+Mesh::Hit Mesh::pick(const QVector3D &origin, const QVector3D &rayDirection,
+                     const std::function<bool(int element)> &accept, const QVector4D *clip) const {
     Hit hit;
     const QVector3D direction = rayDirection.normalized();
     if (direction.isNull() || nodes.isEmpty())
@@ -193,11 +194,15 @@ Mesh::Hit Mesh::pick(const QVector3D &origin, const QVector3D &rayDirection) con
         for (int t = node.first; t < node.first + node.count; ++t) {
             const int i = triangleOrder.at(t);
             float distance = 0;
-            if (rayHitsTriangle(origin, direction, positions.at(i), positions.at(i + 1), positions.at(i + 2), &distance)
-                && distance < best) {
-                best = distance;
-                bestTriangle = i;
-            }
+            if (!rayHitsTriangle(origin, direction, positions.at(i), positions.at(i + 1), positions.at(i + 2), &distance)
+                || distance >= best)
+                continue;
+            if (accept && !accept(triangleElement.at(i / 3)))
+                continue;
+            if (clip && QVector3D::dotProduct(clip->toVector3D(), origin + direction * distance) > clip->w())
+                continue;
+            best = distance;
+            bestTriangle = i;
         }
     }
     if (bestTriangle >= 0) {

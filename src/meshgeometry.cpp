@@ -9,9 +9,18 @@ void MeshGeometry::setBackend(Backend *backend) {
         return;
     if (m_meshConnection)
         disconnect(m_meshConnection);
+    if (m_visibilityConnection)
+        disconnect(m_visibilityConnection);
     m_backend = backend;
-    if (m_backend)
+    if (m_backend) {
         m_meshConnection = connect(m_backend, &Backend::meshChanged, this, &MeshGeometry::scheduleRebuild);
+        // The storey slider and X-ray change which elements a batch holds;
+        // the single-element highlight doesn't care.
+        m_visibilityConnection = connect(m_backend, &Backend::visibilityChanged, this, [this] {
+            if (m_element < 0)
+                scheduleRebuild();
+        });
+    }
     emit backendChanged();
     scheduleRebuild();
 }
@@ -32,6 +41,14 @@ void MeshGeometry::setElement(int element) {
     scheduleRebuild();
 }
 
+void MeshGeometry::setGhosts(bool ghosts) {
+    if (m_ghosts == ghosts)
+        return;
+    m_ghosts = ghosts;
+    emit ghostsChanged();
+    scheduleRebuild();
+}
+
 void MeshGeometry::scheduleRebuild() {
     if (m_rebuildPending)
         return;
@@ -42,6 +59,7 @@ void MeshGeometry::scheduleRebuild() {
 void MeshGeometry::rebuild() {
     m_rebuildPending = false;
     clear();
+    const int previousCount = m_vertexCount;
     m_vertexCount = 0;
     const Mesh *mesh = m_backend ? m_backend->mesh() : nullptr;
 
@@ -67,11 +85,16 @@ void MeshGeometry::rebuild() {
         if (m_element >= 0 && m_element < mesh->elements.size()) {
             for (const Mesh::Part &part : mesh->elements.at(m_element).parts)
                 addPart(part);
-        } else if (m_element < 0 && m_material >= 0) {
-            for (int e = 0; e < mesh->elements.size(); ++e)
+        } else if (m_element < 0 && (m_material >= 0 || m_ghosts)) {
+            const QVector<quint8> &visibility = m_backend->visibility();
+            const quint8 wanted = m_ghosts ? Backend::Ghosted : Backend::Shown;
+            for (int e = 0; e < mesh->elements.size(); ++e) {
+                if (e < visibility.size() && visibility.at(e) != wanted)
+                    continue;
                 for (const Mesh::Part &part : mesh->elements.at(e).parts)
-                    if (part.material == m_material)
+                    if (m_ghosts || part.material == m_material)
                         addPart(part);
+            }
         }
     }
 
@@ -83,4 +106,6 @@ void MeshGeometry::rebuild() {
     if (m_vertexCount > 0)
         setBounds(min, max);
     update();
+    if (m_vertexCount != previousCount)
+        emit vertexCountChanged();
 }

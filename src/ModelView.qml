@@ -18,6 +18,23 @@ Item {
     readonly property real fieldOfView: 50
     readonly property real radius: Math.max(0.5, backend.modelRadius)
     readonly property real sceneRadius: Math.max(radius, backend.sceneRadius)
+    readonly property real sectionEnabled: backend.sectionAxis !== Backend.NoSection ? 1 : 0
+    readonly property vector4d sectionPlane: backend.sectionPlane
+    property bool showSectionPlane: false
+    property bool movingSection: false
+
+    Connections {
+        target: backend
+        function onSectionChanged() {
+            root.showSectionPlane = true
+            sectionPlaneTimer.restart()
+        }
+    }
+    Timer {
+        id: sectionPlaneTimer
+        interval: 1200
+        onTriggered: root.showSectionPlane = root.movingSection
+    }
 
     function clamp(value, low, high) { return Math.max(low, Math.min(high, value)) }
 
@@ -171,19 +188,45 @@ Item {
             delegate: Model {
                 required property var modelData
                 required property int index
+                readonly property bool translucent: modelData.opacity < 0.999
                 geometry: MeshGeometry {
+                    id: batch
                     backend: root.source
                     material: index
                 }
-                materials: PrincipledMaterial {
-                    baseColor: modelData.color
-                    opacity: modelData.opacity
-                    alphaMode: modelData.opacity < 0.999 ? PrincipledMaterial.Blend : PrincipledMaterial.Opaque
+                visible: batch.vertexCount > 0
+                materials: CustomMaterial {
+                    property color baseColor: Qt.alpha(modelData.color, modelData.opacity)
+                    property real sectionEnabled: root.sectionEnabled
+                    property vector4d sectionPlane: root.sectionPlane
+                    shadingMode: CustomMaterial.Shaded
                     cullMode: Material.NoCulling
-                    roughness: 0.85
-                    metalness: 0
-                    specularAmount: 0.2
+                    sourceBlend: translucent ? CustomMaterial.SrcAlpha : CustomMaterial.NoBlend
+                    destinationBlend: translucent ? CustomMaterial.OneMinusSrcAlpha : CustomMaterial.NoBlend
+                    fragmentShader: "qrc:/model.frag"
                 }
+            }
+        }
+
+        // What X-ray mode sets aside: one faint, depth-less shell around the
+        // discipline it shows.
+        Model {
+            geometry: MeshGeometry {
+                id: ghosts
+                backend: root.source
+                ghosts: true
+            }
+            visible: ghosts.vertexCount > 0
+            materials: CustomMaterial {
+                property color baseColor: Qt.alpha(theme.foreground, 0.07)
+                property real sectionEnabled: root.sectionEnabled
+                property vector4d sectionPlane: root.sectionPlane
+                shadingMode: CustomMaterial.Shaded
+                cullMode: Material.NoCulling
+                depthDrawMode: Material.NeverDepthDraw
+                sourceBlend: CustomMaterial.SrcAlpha
+                destinationBlend: CustomMaterial.OneMinusSrcAlpha
+                fragmentShader: "qrc:/model.frag"
             }
         }
 
@@ -195,10 +238,31 @@ Item {
             }
             materials: CustomMaterial {
                 property color accent: theme.accent
+                property real sectionEnabled: root.sectionEnabled
+                property vector4d sectionPlane: root.sectionPlane
                 shadingMode: CustomMaterial.Shaded
                 cullMode: Material.NoCulling
                 vertexShader: "qrc:/selection.vert"
                 fragmentShader: "qrc:/selection.frag"
+            }
+        }
+
+        // The section plane itself, shown while it moves so it's clear where
+        // the cut is.
+        Model {
+            source: "#Rectangle"
+            visible: root.sectionEnabled > 0.5 && root.showSectionPlane
+            position: backend.sectionCenter
+            scale: Qt.vector3d(backend.sectionSize / 100, backend.sectionSize / 100, 1)
+            eulerRotation: backend.sectionAxis === Backend.Plan ? Qt.vector3d(-90, 0, 0)
+                         : backend.sectionAxis === Backend.AlongX ? Qt.vector3d(0, 90, 0) : Qt.vector3d(0, 0, 0)
+            materials: PrincipledMaterial {
+                baseColor: theme.accent
+                opacity: 0.14
+                alphaMode: PrincipledMaterial.Blend
+                lighting: PrincipledMaterial.NoLighting
+                cullMode: Material.NoCulling
+                depthDrawMode: Material.NeverDepthDraw
             }
         }
     }
@@ -215,6 +279,11 @@ Item {
             last = Qt.point(event.x, event.y)
             dragged = false
             panning = event.button !== Qt.LeftButton || (event.modifiers & Qt.ShiftModifier)
+            // Alt and drag slides the section plane through the building.
+            root.movingSection = event.button === Qt.LeftButton && (event.modifiers & Qt.AltModifier)
+                && backend.sectionAxis !== Backend.NoSection
+            if (root.movingSection)
+                root.showSectionPlane = true
         }
         onPositionChanged: (event) => {
             const dx = event.x - last.x, dy = event.y - last.y
@@ -222,12 +291,19 @@ Item {
                 return
             dragged = true
             last = Qt.point(event.x, event.y)
-            if (panning)
+            if (root.movingSection)
+                backend.sectionPosition = backend.sectionPosition + (dx - dy) / Math.max(1, Math.min(width, height))
+            else if (panning)
                 root.pan(dx, dy)
             else
                 root.orbit(-dx * 0.4, -dy * 0.4)
         }
         onReleased: (event) => {
+            if (root.movingSection) {
+                root.movingSection = false
+                sectionPlaneTimer.restart()
+                return
+            }
             if (!dragged && event.button === Qt.LeftButton)
                 root.selectAt(event.x, event.y)
         }

@@ -33,8 +33,12 @@ DATA;
 #4=IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.);
 #5=IFCSIUNIT(*,.VOLUMEUNIT.,$,.CUBIC_METRE.);
 #10=IFCBUILDINGSTOREY('2HnL8Sk2v2pBQHpMWrhu1Y',$,'Ground floor',$,$,$,$,$,.ELEMENT.,0.);
-#11=IFCWALL('3vB2YO$MX4xv5uCqZZG05x',$,'Party wall','Between the flats','solid',$,$,'W-01',.SOLIDWALL.);
+#11=IFCWALL('3vB2YO$MX4xv5uCqZZG05x',$,'Party wall','Between the flats','solid',$,#60,'W-01',.SOLIDWALL.);
 #12=IFCRELCONTAINEDINSPATIALSTRUCTURE('1Fk0yz8Ub0Wf1h5IfvA3MX',$,$,$,(#11),#10);
+#13=IFCBUILDINGSTOREY('2HnL8Sk2v2pBQHpMWrhu2Y',$,'First floor',$,$,$,$,$,.ELEMENT.,3000.);
+#14=IFCSLAB('0tB4bfd1z0Q8Y2kBVXz0Zz',$,'Floor slab',$,$,$,#60,$,.FLOOR.);
+#15=IFCRELCONTAINEDINSPATIALSTRUCTURE('1Fk0yz8Ub0Wf1h5IfvA3MY',$,$,$,(#14),#13);
+#60=IFCPRODUCTDEFINITIONSHAPE($,$,());
 #20=IFCWALLTYPE('0tB4bfd1z0Q8Y2kBVXz0Ab',$,'Brick 240',$,$,(#30),$,$,$,.SOLIDWALL.);
 #21=IFCRELDEFINESBYTYPE('2rZ2Ng0rT4Hu7B0vUE3qkP',$,$,$,(#11),#20);
 #30=IFCPROPERTYSET('1zyXNNdqf3wfSzlDa4D8qB',$,'Pset_WallCommon',$,(#31,#32,#33));
@@ -331,6 +335,38 @@ END-ISO-10303-21;
         QCOMPARE(row, QString("120 ft²"));
     }
 
+    void ifcInfoListsProductsAndStoreys() {
+        IfcInfo info;
+        QVERIFY(info.parse(sampleIfc));
+        const QVector<IfcInfo::Product> products = info.products();
+        QCOMPARE(products.size(), 2);
+        QCOMPARE(products.at(0).ifcClass, QString("IfcSlab"));
+        QCOMPARE(products.at(1).name, QString("Party wall"));
+        const QVector<IfcInfo::Storey> storeys = info.storeys();
+        QCOMPARE(storeys.size(), 2);
+        QCOMPARE(storeys.at(0).name, QString("Ground floor"));
+        QCOMPARE(storeys.at(1).name, QString("First floor"));
+        QCOMPARE(info.storeyIdOf("0tB4bfd1z0Q8Y2kBVXz0Zz"), storeys.at(1).id);
+    }
+
+    void ifcInfoSortsDisciplines() {
+        QCOMPARE(IfcInfo::disciplinesOfClass("IfcColumn"), int(IfcInfo::Structure));
+        QCOMPARE(IfcInfo::disciplinesOfClass("IfcFlowSegment"), int(IfcInfo::Services));
+        QCOMPARE(IfcInfo::disciplinesOfClass("IfcDuctSegment"), int(IfcInfo::Services));
+        QCOMPARE(IfcInfo::disciplinesOfClass("IfcDoor"), int(IfcInfo::Architecture));
+        QCOMPARE(IfcInfo::disciplinesOfClass("IfcWallStandardCase", 1), int(IfcInfo::Structure));
+        QCOMPARE(IfcInfo::disciplinesOfClass("IfcWall", 0), int(IfcInfo::Architecture));
+        QCOMPARE(IfcInfo::disciplinesOfClass("IfcSlab"), IfcInfo::Structure | IfcInfo::Architecture);
+
+        // The wall's type says it carries load.
+        QByteArray loadBearing = sampleIfc;
+        loadBearing.replace("#31=IFCPROPERTYSINGLEVALUE('IsExternal',$,IFCBOOLEAN(.F.),$);",
+                            "#31=IFCPROPERTYSINGLEVALUE('LoadBearing',$,IFCBOOLEAN(.T.),$);");
+        IfcInfo info;
+        QVERIFY(info.parse(loadBearing));
+        QCOMPARE(info.disciplines("3vB2YO$MX4xv5uCqZZG05x"), int(IfcInfo::Structure));
+    }
+
     void ifcInfoFallsBackToMeasuredQuantities() {
         // The same wall with its quantities left out.
         QByteArray withoutQuantities = sampleIfc;
@@ -513,14 +549,13 @@ END-ISO-10303-21;
         QCOMPARE(backend.materials().size(), 2);
         QVERIFY(backend.errorMessage().isEmpty());
 
-        // The wall's mesh has its IFC properties; the other element is in
-        // the geometry only, and says what it can.
+        // Each mesh has its element's IFC properties.
         backend.select(0);
         QCOMPARE(backend.selection().value("ifcClass").toString(), QString("IfcWall"));
         QCOMPARE(backend.selection().value("name").toString(), QString("Party wall"));
         QVERIFY(backend.selection().value("sections").toList().size() == 2);
         backend.select(1);
-        QCOMPARE(backend.selection().value("ifcClass").toString(), QString("Element"));
+        QCOMPARE(backend.selection().value("ifcClass").toString(), QString("IfcSlab"));
         backend.clearSelection();
         QCOMPARE(backend.selectedElement(), -1);
 
@@ -537,6 +572,76 @@ END-ISO-10303-21;
         QCOMPARE(runs.readAll().count('\n'), 1);
         QCOMPARE(backend.selectedElement(), -1);
         qunsetenv("KEYSTONE_IFCCONVERT");
+    }
+
+    void backendPeelsStoreysXraysAndCuts() {
+        QTemporaryDir dir;
+        write(dir.filePath("wall.ifc"), sampleIfc);
+        qputenv("KEYSTONE_IFCCONVERT", writeFakeIfcConvert(dir).toUtf8());
+        Backend backend(new FakePicker(), dir.filePath("cache"));
+        QVERIFY(backend.openPath(dir.filePath("wall.ifc")));
+        QTRY_COMPARE(backend.state(), Backend::Ready);
+        qunsetenv("KEYSTONE_IFCCONVERT");
+        QCOMPARE(backend.storeys(), (QStringList{"Ground floor", "First floor"}));
+        QCOMPARE(backend.storeyLimit(), 2);
+        QCOMPARE(backend.shownCount(), 2);
+        const int wall = backend.mesh()->indexOf("3vB2YO$MX4xv5uCqZZG05x");
+        const int slab = backend.mesh()->indexOf("0tB4bfd1z0Q8Y2kBVXz0Zz");
+        QCOMPARE(backend.storeyOf(slab), 1);
+
+        // Peeling the first floor away hides the slab, and it can't be picked.
+        QSignalSpy visibility(&backend, &Backend::visibilityChanged);
+        backend.select(slab);
+        backend.setStoreyLimit(1);
+        QCOMPARE(visibility.count(), 1);
+        QCOMPARE(backend.visibility().at(slab), quint8(Backend::Hidden));
+        QCOMPARE(backend.selectedElement(), -1);
+        backend.select(slab);
+        QCOMPARE(backend.selectedElement(), -1);
+        backend.setStoreyLimit(0);
+        QCOMPARE(backend.storeyLimit(), 1);
+        backend.setStoreyLimit(2);
+
+        // X-ray for services ghosts both, so clicks pass through them.
+        backend.setXray(Backend::Services);
+        QCOMPARE(backend.shownCount(), 0);
+        QCOMPARE(backend.visibility().at(wall), quint8(Backend::Ghosted));
+        const QVector3D top = backend.mesh()->elements.at(wall).max + QVector3D(-0.5f, 0, -0.5f);
+        backend.selectAt(top + QVector3D(0, 10, 0), top);
+        QCOMPARE(backend.selectedElement(), -1);
+        // The tree can still pick a ghosted element.
+        backend.select(wall);
+        QCOMPARE(backend.selectedElement(), wall);
+        backend.setXray(Backend::Architecture);
+        QCOMPARE(backend.shownCount(), 2);
+        backend.cycleXray();
+        QCOMPARE(backend.xray(), Backend::All);
+
+        // A plan section at the bottom cuts the whole wall away; at the top it
+        // keeps it all.
+        backend.clearSelection();
+        backend.setSectionAxis(Backend::Plan);
+        backend.setSectionPosition(0);
+        backend.selectAt(top + QVector3D(0, 10, 0), top);
+        QCOMPARE(backend.selectedElement(), -1);
+        backend.setSectionPosition(1);
+        backend.selectAt(top + QVector3D(0, 10, 0), top);
+        QCOMPARE(backend.selectedElement(), wall);
+        QCOMPARE(backend.sectionPlane().y(), 1.0f);
+        backend.setSectionFlipped(true);
+        QCOMPARE(backend.sectionPlane().y(), -1.0f);
+
+        // The element list, storey by storey, narrowed by a search.
+        ElementList *elements = backend.elements();
+        QCOMPARE(elements->total(), 2);
+        QCOMPARE(elements->data(elements->index(0), ElementList::NameRole).toString(), QString("Party wall"));
+        QCOMPARE(elements->data(elements->index(1), ElementList::StoreyRole).toString(), QString("First floor"));
+        elements->setFilter("slab first");
+        QCOMPARE(elements->rowCount(), 1);
+        QCOMPARE(elements->rowOf(slab), 0);
+        QCOMPARE(elements->rowOf(wall), -1);
+        elements->setFilter("nothing like it");
+        QCOMPARE(elements->rowCount(), 0);
     }
 
     void backendKeepsLoadingThroughAFailedOpen() {

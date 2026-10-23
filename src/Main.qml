@@ -23,33 +23,50 @@ ApplicationWindow {
 
     property bool helpVisible: false
     property bool panelVisible: true
+    property bool treeVisible: false
     readonly property bool hasModel: backend.elementCount > 0
     readonly property bool busy: backend.state === Backend.Loading
+    // Typing in the search field mustn't orbit, quit, or cut the model.
+    readonly property bool typing: activeFocusItem !== null && activeFocusItem.hasOwnProperty("cursorPosition")
+    readonly property bool keys: win.hasModel && !win.typing
 
-    Shortcut { sequence: "?"; context: Qt.ApplicationShortcut; onActivated: win.helpVisible = !win.helpVisible }
-    Shortcut { sequence: "Q"; context: Qt.ApplicationShortcut; onActivated: Qt.quit() }
+    Shortcut { sequence: "?"; context: Qt.ApplicationShortcut; enabled: !win.typing; onActivated: win.helpVisible = !win.helpVisible }
+    Shortcut { sequence: "Q"; context: Qt.ApplicationShortcut; enabled: !win.typing; onActivated: Qt.quit() }
     Shortcut { sequences: [StandardKey.Open]; context: Qt.ApplicationShortcut; onActivated: backend.open() }
+    Shortcut { sequence: "Space"; context: Qt.ApplicationShortcut; enabled: win.keys; onActivated: modelView.frameSelection() }
+    Shortcut { sequence: "Home"; context: Qt.ApplicationShortcut; enabled: win.keys; onActivated: modelView.resetView() }
+    Shortcut { sequence: "1"; context: Qt.ApplicationShortcut; enabled: win.keys; onActivated: modelView.setView(0, -8) }
+    Shortcut { sequence: "2"; context: Qt.ApplicationShortcut; enabled: win.keys; onActivated: modelView.setView(90, -8) }
+    Shortcut { sequence: "3"; context: Qt.ApplicationShortcut; enabled: win.keys; onActivated: modelView.setView(180, -8) }
+    Shortcut { sequence: "4"; context: Qt.ApplicationShortcut; enabled: win.keys; onActivated: modelView.setView(0, -89.9) }
+    Shortcut { sequence: "Left"; context: Qt.ApplicationShortcut; enabled: win.keys; onActivated: modelView.orbit(-15, 0) }
+    Shortcut { sequence: "Right"; context: Qt.ApplicationShortcut; enabled: win.keys; onActivated: modelView.orbit(15, 0) }
+    Shortcut { sequence: "Up"; context: Qt.ApplicationShortcut; enabled: win.keys && !win.treeHasFocus; onActivated: modelView.orbit(0, -10) }
+    Shortcut { sequence: "Down"; context: Qt.ApplicationShortcut; enabled: win.keys && !win.treeHasFocus; onActivated: modelView.orbit(0, 10) }
+    Shortcut { sequences: ["+", "=", StandardKey.ZoomIn]; context: Qt.ApplicationShortcut; enabled: win.keys; onActivated: modelView.zoom(0.8) }
+    Shortcut { sequences: ["-", StandardKey.ZoomOut]; context: Qt.ApplicationShortcut; enabled: win.keys; onActivated: modelView.zoom(1.25) }
+    Shortcut { sequence: "I"; context: Qt.ApplicationShortcut; enabled: !win.typing; onActivated: win.panelVisible = !win.panelVisible }
+    Shortcut { sequence: "T"; context: Qt.ApplicationShortcut; enabled: win.keys; onActivated: win.treeVisible = !win.treeVisible }
     Shortcut {
-        sequence: "Space"
+        sequences: [StandardKey.Find]
         context: Qt.ApplicationShortcut
         enabled: win.hasModel
-        onActivated: modelView.frameSelection()
+        onActivated: {
+            win.treeVisible = true
+            elementsPanel.focusSearch()
+        }
     }
-    Shortcut { sequence: "Home"; context: Qt.ApplicationShortcut; enabled: win.hasModel; onActivated: modelView.resetView() }
-    Shortcut { sequence: "1"; context: Qt.ApplicationShortcut; enabled: win.hasModel; onActivated: modelView.setView(0, -8) }
-    Shortcut { sequence: "2"; context: Qt.ApplicationShortcut; enabled: win.hasModel; onActivated: modelView.setView(90, -8) }
-    Shortcut { sequence: "3"; context: Qt.ApplicationShortcut; enabled: win.hasModel; onActivated: modelView.setView(180, -8) }
-    Shortcut { sequence: "4"; context: Qt.ApplicationShortcut; enabled: win.hasModel; onActivated: modelView.setView(0, -89.9) }
-    Shortcut { sequence: "Left"; context: Qt.ApplicationShortcut; enabled: win.hasModel; onActivated: modelView.orbit(-15, 0) }
-    Shortcut { sequence: "Right"; context: Qt.ApplicationShortcut; enabled: win.hasModel; onActivated: modelView.orbit(15, 0) }
-    Shortcut { sequence: "Up"; context: Qt.ApplicationShortcut; enabled: win.hasModel; onActivated: modelView.orbit(0, -10) }
-    Shortcut { sequence: "Down"; context: Qt.ApplicationShortcut; enabled: win.hasModel; onActivated: modelView.orbit(0, 10) }
-    Shortcut { sequences: ["+", "=", StandardKey.ZoomIn]; context: Qt.ApplicationShortcut; enabled: win.hasModel; onActivated: modelView.zoom(0.8) }
-    Shortcut { sequences: ["-", StandardKey.ZoomOut]; context: Qt.ApplicationShortcut; enabled: win.hasModel; onActivated: modelView.zoom(1.25) }
-    Shortcut { sequence: "I"; context: Qt.ApplicationShortcut; onActivated: win.panelVisible = !win.panelVisible }
+    Shortcut { sequence: "PgUp"; context: Qt.ApplicationShortcut; enabled: win.keys; onActivated: backend.storeyLimit = backend.storeyLimit + 1 }
+    Shortcut { sequence: "PgDown"; context: Qt.ApplicationShortcut; enabled: win.keys; onActivated: backend.storeyLimit = backend.storeyLimit - 1 }
+    Shortcut { sequence: "X"; context: Qt.ApplicationShortcut; enabled: win.keys; onActivated: backend.cycleXray() }
+    Shortcut { sequence: "S"; context: Qt.ApplicationShortcut; enabled: win.keys; onActivated: backend.cycleSection() }
+    Shortcut { sequence: "F"; context: Qt.ApplicationShortcut; enabled: win.keys && backend.sectionAxis !== Backend.NoSection; onActivated: backend.sectionFlipped = !backend.sectionFlipped }
+    Shortcut { sequence: "]"; context: Qt.ApplicationShortcut; enabled: win.keys; onActivated: backend.sectionPosition = backend.sectionPosition + 0.02 }
+    Shortcut { sequence: "["; context: Qt.ApplicationShortcut; enabled: win.keys; onActivated: backend.sectionPosition = backend.sectionPosition - 0.02 }
     Shortcut {
         sequence: "Escape"
         context: Qt.ApplicationShortcut
+        enabled: !win.typing
         onActivated: {
             if (win.helpVisible)
                 win.helpVisible = false
@@ -57,6 +74,7 @@ ApplicationWindow {
                 backend.clearSelection()
         }
     }
+    readonly property bool treeHasFocus: win.treeVisible && activeFocusItem !== null && activeFocusItem instanceof ListView
 
     // A message that doesn't replace the view (a failed second open,
     // unreadable properties), shown for a while.
@@ -161,9 +179,32 @@ ApplicationWindow {
             }
         }
 
+        ElementsPanel {
+            id: elementsPanel
+            anchors.top: parent.top
+            anchors.bottom: viewToolbar.top
+            anchors.left: parent.left
+            anchors.margins: 12
+            width: Math.min(320, parent.width * 0.3)
+            visible: win.hasModel && win.treeVisible
+            onFrameRequested: modelView.frameSelection()
+            onCloseRequested: win.treeVisible = false
+        }
+
+        ViewToolbar {
+            id: viewToolbar
+            anchors.bottom: statusBar.top
+            anchors.bottomMargin: 12
+            anchors.horizontalCenter: parent.horizontalCenter
+            visible: win.hasModel
+            // Kept clear of the side panels when the window is narrow.
+            width: Math.min(implicitWidth, parent.width - 24)
+            clip: true
+        }
+
         PropertiesPanel {
             anchors.top: parent.top
-            anchors.bottom: statusBar.top
+            anchors.bottom: viewToolbar.top
             anchors.right: parent.right
             anchors.margins: 12
             width: Math.min(380, parent.width * 0.42)
@@ -204,6 +245,12 @@ ApplicationWindow {
                     font.pixelSize: 12
                     color: Qt.rgba(1, 1, 1, 0.55)
                 }
+                Label {
+                    visible: backend.shownCount < backend.elementCount
+                    text: qsTr("%1 shown").arg(backend.shownCount.toLocaleString(Qt.locale(), 'f', 0))
+                    font.pixelSize: 12
+                    color: theme.accent
+                }
                 Item { Layout.fillWidth: true }
                 Label {
                     text: backend.selectedElement < 0 ? qsTr("Click an element to see its properties") : ""
@@ -222,7 +269,7 @@ ApplicationWindow {
         }
 
         Rectangle {
-            anchors.bottom: statusBar.top
+            anchors.bottom: viewToolbar.top
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.bottomMargin: 16
             visible: win.notice !== ""

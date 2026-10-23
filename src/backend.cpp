@@ -1,6 +1,7 @@
 #include "backend.h"
 
 #include <QFileInfo>
+#include <algorithm>
 
 #include "filepicker.h"
 #include "portalfilepicker.h"
@@ -17,14 +18,18 @@ Backend::Backend(FilePicker *filePicker, const QString &cacheDirectory, QObject 
         clearSelection();
         m_mesh = result.mesh;
         m_info = result.info;
-        QVector3D min, max;
-        m_mesh->focusBounds(&min, &max);
-        m_focusCenter = (min + max) / 2;
-        m_focusRadius = (max - min).length() / 2;
+        m_mesh->focusBounds(&m_focusMin, &m_focusMax);
+        m_focusCenter = (m_focusMin + m_focusMax) / 2;
+        m_focusRadius = (m_focusMax - m_focusMin).length() / 2;
+        describeElements();
+        m_storeyLimit = int(m_storeyNames.size());
+        updateVisibility();
         m_path = result.path;
         m_warning = result.warning;
         m_error.clear();
         emit meshChanged();
+        emit storeyLimitChanged();
+        emit sectionChanged();
         setState(Ready);
         if (!m_warning.isEmpty())
             emit notice(m_warning);
@@ -127,10 +132,155 @@ void Backend::setState(State state) {
     emit stateChanged();
 }
 
+void Backend::describeElements() {
+    const int count = int(m_mesh->elements.size());
+    m_storeyNames.clear();
+    m_storeyOfElement.fill(-1, count);
+    m_disciplines.fill(IfcInfo::Architecture, count);
+    QHash<qint64, int> storeyIndex;
+    if (m_info) {
+        for (const IfcInfo::Storey &storey : m_info->storeys()) {
+            storeyIndex.insert(storey.id, int(m_storeyNames.size()));
+            m_storeyNames.append(storey.name.isEmpty() ? tr("Storey %1").arg(m_storeyNames.size() + 1) : storey.name);
+        }
+    }
+    QVector<ElementList::Item> items;
+    items.reserve(count);
+    for (int e = 0; e < count; ++e) {
+        const QString globalId = m_mesh->elements.at(e).globalId;
+        ElementList::Item item;
+        item.element = e;
+        item.globalId = globalId;
+        if (m_info && m_info->contains(globalId)) {
+            m_storeyOfElement[e] = storeyIndex.value(m_info->storeyIdOf(globalId), -1);
+            m_disciplines[e] = m_info->disciplines(globalId);
+            item.ifcClass = m_info->className(globalId);
+            item.name = m_info->nameOf(globalId);
+        }
+        const int storey = m_storeyOfElement.at(e);
+        item.storey = storey >= 0 ? m_storeyNames.at(storey) : tr("Not in a storey");
+        item.storeyOrder = storey >= 0 ? storey : int(m_storeyNames.size());
+        items.append(item);
+    }
+    m_elements.setItems(items);
+}
+
+void Backend::updateVisibility() {
+    if (!m_mesh)
+        return;
+    const int mask = m_xray == Structure ? IfcInfo::Structure
+                   : m_xray == Services ? IfcInfo::Services
+                   : m_xray == Architecture ? IfcInfo::Architecture : 0;
+    QVector<quint8> visibility(m_mesh->elements.size(), Shown);
+    for (int e = 0; e < visibility.size(); ++e) {
+        // Elements in no storey (the site, the terrain) stay put as storeys
+        // are peeled away.
+        const int storey = m_storeyOfElement.value(e, -1);
+        if (storey >= 0 && storey >= m_storeyLimit)
+            visibility[e] = Hidden;
+        else if (mask && !(m_disciplines.value(e, IfcInfo::Architecture) & mask))
+            visibility[e] = Ghosted;
+    }
+    m_visibility = visibility;
+    ++m_visibilityRevision;
+    m_elements.setStates(m_visibility);
+    if (m_selected >= 0 && m_visibility.at(m_selected) == Hidden)
+        clearSelection();
+    emit visibilityChanged();
+}
+
+bool Backend::pickable(int element) const {
+    return element >= 0 && element < m_visibility.size() && m_visibility.at(element) == Shown;
+}
+
+int Backend::shownCount() const {
+    return int(std::count(m_visibility.begin(), m_visibility.end(), quint8(Shown)));
+}
+
+void Backend::setStoreyLimit(int limit) {
+    // At least the lowest storey stays, so there's always a floor to stand on.
+    limit = m_storeyNames.isEmpty() ? 0 : qBound(1, limit, int(m_storeyNames.size()));
+    if (limit == m_storeyLimit)
+        return;
+    m_storeyLimit = limit;
+    emit storeyLimitChanged();
+    updateVisibility();
+}
+
+void Backend::setXray(XRay xray) {
+    if (xray == m_xray)
+        return;
+    m_xray = xray;
+    emit xrayChanged();
+    updateVisibility();
+}
+
+void Backend::cycleXray() {
+    setXray(XRay((int(m_xray) + 1) % 4));
+}
+
+void Backend::setSectionAxis(SectionAxis axis) {
+    if (axis == m_sectionAxis)
+        return;
+    m_sectionAxis = axis;
+    emit sectionChanged();
+}
+
+void Backend::cycleSection() {
+    setSectionAxis(SectionAxis((int(m_sectionAxis) + 1) % 4));
+}
+
+void Backend::setSectionPosition(double position) {
+    position = qBound(0.0, position, 1.0);
+    if (qFuzzyCompare(position + 1, m_sectionPosition + 1))
+        return;
+    m_sectionPosition = position;
+    emit sectionChanged();
+}
+
+void Backend::setSectionFlipped(bool flipped) {
+    if (flipped == m_sectionFlipped)
+        return;
+    m_sectionFlipped = flipped;
+    emit sectionChanged();
+}
+
+namespace {
+int sectionAxisIndex(Backend::SectionAxis axis) {
+    return axis == Backend::Plan ? 1 : axis == Backend::AlongX ? 0 : 2;
+}
+}
+
+QVector4D Backend::sectionPlane() const {
+    if (m_sectionAxis == NoSection)
+        return QVector4D(0, 0, 0, 1);
+    const int axis = sectionAxisIndex(m_sectionAxis);
+    // A hair past the bounds at either end, so 0 and 1 cut everything or
+    // nothing rather than leaving a face flickering on the plane.
+    const float margin = 0.001f * qMax(1.0f, m_focusRadius);
+    const float lo = m_focusMin[axis] - margin, hi = m_focusMax[axis] + margin;
+    const float value = lo + float(m_sectionPosition) * (hi - lo);
+    QVector3D normal;
+    normal[axis] = m_sectionFlipped ? -1 : 1;
+    return QVector4D(normal, m_sectionFlipped ? -value : value);
+}
+
+QVector3D Backend::sectionCenter() const {
+    QVector3D center = m_focusCenter;
+    if (m_sectionAxis != NoSection) {
+        const int axis = sectionAxisIndex(m_sectionAxis);
+        const QVector4D plane = sectionPlane();
+        center[axis] = plane.w() * plane[axis];
+    }
+    return center;
+}
+
 void Backend::selectAt(const QVector3D &near, const QVector3D &far) {
     if (!m_mesh)
         return;
-    const Mesh::Hit hit = m_mesh->pick(near, far - near);
+    const QVector4D plane = sectionPlane();
+    const Mesh::Hit hit = m_mesh->pick(near, far - near, [this](int e) { return pickable(e); },
+                                       m_sectionAxis != NoSection ? &plane : nullptr);
     if (hit.element < 0)
         clearSelection();
     else
@@ -140,12 +290,18 @@ void Backend::selectAt(const QVector3D &near, const QVector3D &far) {
 QVariant Backend::hitPoint(const QVector3D &near, const QVector3D &far) const {
     if (!m_mesh)
         return {};
-    const Mesh::Hit hit = m_mesh->pick(near, far - near);
+    // Zooming lands on what's drawn, ghosts included, but not on what the
+    // section plane has cut away or the storey slider has hidden.
+    const QVector4D plane = sectionPlane();
+    const Mesh::Hit hit = m_mesh->pick(near, far - near,
+                                       [this](int e) { return e < m_visibility.size() && m_visibility.at(e) != Hidden; },
+                                       m_sectionAxis != NoSection ? &plane : nullptr);
     return hit.element < 0 ? QVariant() : QVariant(hit.point);
 }
 
 void Backend::select(int element) {
-    if (!m_mesh || element < 0 || element >= m_mesh->elements.size()) {
+    // Clicks only land on drawn elements, but the tree can pick a ghosted one.
+    if (!m_mesh || element < 0 || element >= m_mesh->elements.size() || m_visibility.value(element) == Hidden) {
         clearSelection();
         return;
     }

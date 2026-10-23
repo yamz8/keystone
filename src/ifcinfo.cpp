@@ -216,6 +216,120 @@ QString IfcInfo::storeyName(const QString &globalId) const {
     return storey ? name(storey) : QString();
 }
 
+QString IfcInfo::nameOf(const QString &globalId) const {
+    const qint64 id = m_file.idForGlobalId(globalId);
+    return id ? name(id) : QString();
+}
+
+qint64 IfcInfo::storeyIdOf(const QString &globalId) const {
+    return storeyOf(m_file.idForGlobalId(globalId));
+}
+
+QVector<IfcInfo::Product> IfcInfo::products() const {
+    // Products are the rooted entities with a representation, attribute 6;
+    // types keep a list of representation maps there instead, and
+    // relationships have no representation at all.
+    QVector<Product> result;
+    for (auto it = m_file.globalIds().begin(); it != m_file.globalIds().end(); ++it) {
+        const QByteArray type = m_file.type(it.value());
+        if (type.startsWith("IFCREL"))
+            continue;
+        const auto args = m_file.arguments(it.value());
+        if (args.size() <= 6 || args.at(6).kind != Step::Value::Ref)
+            continue;
+        result.append({it.key(), prettyClassName(type), attribute(args, 2), storeyOf(it.value())});
+    }
+    std::sort(result.begin(), result.end(), [](const Product &a, const Product &b) { return a.globalId < b.globalId; });
+    return result;
+}
+
+QVector<IfcInfo::Storey> IfcInfo::storeys() const {
+    QVector<Storey> result;
+    const QVector<qint64> ids = m_file.instancesOf("IFCBUILDINGSTOREY");
+    for (const qint64 id : ids) {
+        const auto args = m_file.arguments(id);
+        Storey storey;
+        storey.id = id;
+        storey.name = attribute(args, 2);
+        if (args.size() > 9 && args.at(9).unwrapped().isNumber()) {
+            storey.elevation = args.at(9).unwrapped().number;
+            storey.hasElevation = true;
+        }
+        result.append(storey);
+    }
+    // Storeys without an elevation stay in file order, after the rest.
+    std::stable_sort(result.begin(), result.end(), [](const Storey &a, const Storey &b) {
+        if (a.hasElevation != b.hasElevation)
+            return a.hasElevation;
+        return a.hasElevation && a.elevation < b.elevation;
+    });
+    return result;
+}
+
+int IfcInfo::loadBearing(qint64 id) const {
+    auto find = [this](const QVector<qint64> &definitions) {
+        for (const qint64 definition : definitions) {
+            if (m_file.type(definition) != "IFCPROPERTYSET")
+                continue;
+            const auto set = m_file.arguments(definition);
+            if (!attribute(set, 2).endsWith("Common"))
+                continue;
+            for (const qint64 property : refsAt(set, 4)) {
+                const auto p = m_file.arguments(property);
+                if (attribute(p, 0) != QLatin1String("LoadBearing") || p.size() < 3)
+                    continue;
+                const QString value = p.at(2).string();
+                if (value == "T" || value == "TRUE")
+                    return 1;
+                if (value == "F" || value == "FALSE")
+                    return 0;
+            }
+        }
+        return -1;
+    };
+    const int own = find(m_definitions.value(id));
+    if (own >= 0)
+        return own;
+    const qint64 type = m_typeOf.value(id, 0);
+    return type ? find(refsAt(m_file.arguments(type), 5)) : -1;
+}
+
+int IfcInfo::disciplinesOfClass(const QString &ifcClass, int loadBearing) {
+    // Building services: the distribution elements and their IFC2x3
+    // flow-element forms, by the names the schemas give them.
+    static const QStringList services = {
+        "IfcFlow", "IfcDuct", "IfcPipe", "IfcCable", "IfcDistribution", "IfcEnergyConversion",
+        "IfcElectric", "IfcAirTerminal", "IfcAirToAir", "IfcSanitary", "IfcLightFixture", "IfcLamp",
+        "IfcOutlet", "IfcSwitchingDevice", "IfcValve", "IfcPump", "IfcFan", "IfcBoiler", "IfcChiller",
+        "IfcTank", "IfcUnitaryEquipment", "IfcUnitaryControl", "IfcCoil", "IfcCompressor", "IfcCondenser",
+        "IfcCooling", "IfcDamper", "IfcFilter", "IfcFireSuppression", "IfcHeatExchanger", "IfcHumidifier",
+        "IfcMotor", "IfcProtectiveDevice", "IfcSensor", "IfcActuator", "IfcAlarm", "IfcController",
+        "IfcSpaceHeater", "IfcStackTerminal", "IfcWasteTerminal", "IfcTransformer", "IfcEvaporat",
+        "IfcEngine", "IfcBurner", "IfcCommunicationsAppliance", "IfcAudioVisualAppliance",
+        "IfcJunctionBox", "IfcInterceptor", "IfcMedicalDevice", "IfcSolarDevice", "IfcElectricFlowStorage",
+    };
+    static const QStringList structure = {
+        "IfcBeam", "IfcColumn", "IfcFooting", "IfcPile", "IfcMember", "IfcPlate", "IfcReinforcing",
+        "IfcTendon", "IfcBearing", "IfcCaissonFoundation", "IfcDeepFoundation",
+    };
+    for (const QString &prefix : services)
+        if (ifcClass.startsWith(prefix))
+            return Services;
+    for (const QString &prefix : structure)
+        if (ifcClass.startsWith(prefix))
+            return Structure;
+    if (ifcClass.startsWith("IfcWall") || ifcClass == "IfcSlab" || ifcClass.startsWith("IfcSlab"))
+        return loadBearing == 1 ? Structure : loadBearing == 0 ? Architecture : Structure | Architecture;
+    return Architecture;
+}
+
+int IfcInfo::disciplines(const QString &globalId) const {
+    const qint64 id = m_file.idForGlobalId(globalId);
+    if (!id)
+        return Architecture;
+    return disciplinesOfClass(prettyClassName(m_file.type(id)), loadBearing(id));
+}
+
 qint64 IfcInfo::storeyOf(qint64 id) const {
     // An element sits in a storey directly, through a space, or as part of an
     // assembly (a roof's slabs, a stair's flights) that does.

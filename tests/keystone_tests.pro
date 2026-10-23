@@ -7,6 +7,7 @@ INCLUDEPATH += ../src
 
 HEADERS += \
     ../src/backend.h \
+    ../src/elementlist.h \
     ../src/filepicker.h \
     ../src/ifcinfo.h \
     ../src/loader.h \
@@ -19,6 +20,7 @@ HEADERS += \
 SOURCES += \
     keystone_tests.cpp \
     ../src/backend.cpp \
+    ../src/elementlist.cpp \
     ../src/ifcinfo.cpp \
     ../src/loader.cpp \
     ../src/mesh.cpp \

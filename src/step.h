@@ -47,6 +47,7 @@ public:
     QVector<qint64> instancesOf(const QByteArray &type) const { return m_byType.value(type); }
     // Every IfcRoot instance by its 22-character GlobalId.
     qint64 idForGlobalId(const QString &globalId) const { return m_byGlobalId.value(globalId, 0); }
+    const QHash<QString, qint64> &globalIds() const { return m_byGlobalId; }
 
 private:
     struct Record {

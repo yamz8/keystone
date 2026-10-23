@@ -6,6 +6,9 @@
         <file alias="ShortcutsOverlay.qml">ShortcutsOverlay.qml</file>
         <file alias="selection.vert">selection.vert</file>
         <file alias="selection.frag">selection.frag</file>
+        <file alias="model.frag">model.frag</file>
+        <file alias="ElementsPanel.qml">ElementsPanel.qml</file>
+        <file alias="ViewToolbar.qml">ViewToolbar.qml</file>
         <file alias="ifcnames.txt">ifcnames.txt</file>
         <file alias="keystone.svg">../pkgbuild/keystone.svg</file>
         <file alias="i18n/ar.json">i18n/ar.json</file>
